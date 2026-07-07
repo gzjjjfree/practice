@@ -1,0 +1,10 @@
+xlsData*
+xlsxData*
+txtData*
+jsonData*
+bundletool*
+*.aab
+*.apk
+*.apks
+*.jks
+*.sh
