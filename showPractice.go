@@ -260,6 +260,21 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 		// 🎯 开启富文本的强制换行保护，防止长题目被截断
 		stemLbl.Wrapping = fyne.TextWrapBreak
 
+		// 1. 做一把“隐形标尺”：用同样的字体样式生成一个带有换行符的假文本，获取它完美的两行高度
+		ruler := widget.NewRichText(
+			&widget.TextSegment{
+				Style: widget.RichTextStyleSubHeading,
+				Text:  "第一行\n第二行",
+			},
+		)
+
+		// 2. 做一个隐形的支撑棍：透明的矩形，将其最小高度锁死为“标尺”的高度
+		minHeightSpacer := canvas.NewRectangle(color.Transparent)
+		minHeightSpacer.SetMinSize(fyne.NewSize(1, ruler.MinSize().Height))
+
+		// 3. 金钟罩：用 Stack 把透明支撑棍和真正的题干叠放在一起
+		stemBox := container.NewStack(minHeightSpacer, stemLbl)
+
 		// ==================== 选项渲染与交互逻辑 ====================
 		optionsBox := container.NewVBox()
 
@@ -403,7 +418,11 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 
 				rightIconText.Color = hexColor(iconColorStr)
 
-				optLayout := container.NewBorder(nil, nil, prefixLbl, container.NewCenter(rightIconText), contentLbl)
+				// 1. 给右侧图标套上一个死守尺寸的盒子（比如 24x24 像素）
+				// 这样即使一开始没有打勾，这个隐形的盒子依然会把右边撑开，提前占好位置
+				fixedIconBox := container.NewGridWrap(fyne.NewSize(24, 24), container.NewCenter(rightIconText))
+
+				optLayout := container.NewBorder(nil, nil, prefixLbl, fixedIconBox, contentLbl)
 
 				optBg := canvas.NewRectangle(hexColor(bgColorStr))
 				optBg.CornerRadius = 6
@@ -557,7 +576,7 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 			questionContent = container.NewVBox(
 				metaRow,
 				widget.NewSeparator(),
-				stemLbl,
+				stemBox,
 				optionsBox,
 				layout.NewSpacer(), // 隔开选项和按钮
 				navGrid,
