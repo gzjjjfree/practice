@@ -20,7 +20,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.26.4"
 
       - name: Set up Java
         # 签名工具 apksigner 需要 Java 环境
@@ -116,7 +116,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.26.4"
 
       - name: Install Fyne CLI
         run: go install fyne.io/fyne/v2/cmd/fyne@latest
@@ -135,68 +135,68 @@ jobs:
           name: macos-app
           path: "*.zip"
 
-  build-docker:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 1. 检出代码
-        uses: actions/checkout@v4
-
-      - name: 2. 初始化 Go 环境
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-          cache: true
-
-      - name: 3. 安装 fyne-cross 工具
-        run: go install github.com/fyne-io/fyne-cross@latest
-
-      - name: 4. 准备签名文件 (Keystore)
-        env:
-          K_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          docker pull fyneio/fyne-cross-images:android
-          RAW_VERSION=${GITHUB_REF#refs/tags/}
-          # 如果 RAW_VERSION 看起来不像版本号（比如是 main 或 master), 则设为 0.0.1
-          if [[ $RAW_VERSION =~ ^v?[0-9] ]]; then
-            CLEAN_VERSION=$(echo $RAW_VERSION | sed 's/^v//')
-          else
-            CLEAN_VERSION="0.0.1"
-          fi
-          echo "$K_BASE64" | base64 -d > release.keystore
-
-      - name: 5. 执行 fyne-cross 构建 (核心对照项)
-        env:
-          K_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-          K_ALIAS: "practice-alias"
-        run: |
-          fyne-cross android \
-            --debug \
-            --arch arm64 \
-            --app-id com.gzjjj.practice \
-            --icon Icon.png \
-            --keystore release.keystore \
-            --keystore-pass "$K_PASS" \
-            --key-pass "$K_PASS" \
-            --key-name "$K_ALIAS" \
-            --name Practice \
-            --app-version "$CLEAN_VERSION" \
-            --app-build ${{ github.run_number }}
-
-      - name: 6. 检查构建产物 (对照本地 fyne-cross/dist 目录)
-        run: |
-          echo "检查构建输出目录："
-          ls -R fyne-cross/dist/
-
-      - name: 7. 上传生成的 APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-build-apk
-          # fyne-cross 默认会将产物放在这个深度目录下
-          path: fyne-cross/dist/android-arm64/Practice.apk
+  #build-docker:  # 由于版本问题，不再适配 docker 编译
+  #  runs-on: ubuntu-latest
+  #
+  #  steps:
+  #    - name: 1. 检出代码
+  #      uses: actions/checkout@v4
+  #
+  #    - name: 2. 初始化 Go 环境
+  #      uses: actions/setup-go@v5
+  #      with:
+  #        go-version: "1.24"
+  #        cache: true
+  #
+  #    - name: 3. 安装 fyne-cross 工具
+  #      run: go install github.com/fyne-io/fyne-cross@latest
+  #
+  #    - name: 4. 准备签名文件 (Keystore)
+  #      env:
+  #        K_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+  #      run: |
+  #        docker pull fyneio/fyne-cross-images:android
+  #        RAW_VERSION=${GITHUB_REF#refs/tags/}
+  #        # 如果 RAW_VERSION 看起来不像版本号（比如是 main 或 master), 则设为 0.0.1
+  #        if [[ $RAW_VERSION =~ ^v?[0-9] ]]; then
+  #          CLEAN_VERSION=$(echo $RAW_VERSION | sed 's/^v//')
+  #        else
+  #          CLEAN_VERSION="0.0.1"
+  #        fi
+  #        echo "$K_BASE64" | base64 -d > release.keystore
+  #
+  #    - name: 5. 执行 fyne-cross 构建 (核心对照项)
+  #      env:
+  #        K_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+  #        K_ALIAS: "practice-alias"
+  #      run: |
+  #        fyne-cross android \
+  #          --debug \
+  #          --arch arm64 \
+  #          --app-id com.gzjjj.practice \
+  #          --icon Icon.png \
+  #          --keystore release.keystore \
+  #          --keystore-pass "$K_PASS" \
+  #          --key-pass "$K_PASS" \
+  #          --key-name "$K_ALIAS" \
+  #          --name Practice \
+  #          --app-version "$CLEAN_VERSION" \
+  #          --app-build ${{ github.run_number }}
+  #
+  #    - name: 6. 检查构建产物 (对照本地 fyne-cross/dist 目录)
+  #      run: |
+  #        echo "检查构建输出目录："
+  #        ls -R fyne-cross/dist/
+  #
+  #    - name: 7. 上传生成的 APK
+  #      uses: actions/upload-artifact@v4
+  #      with:
+  #        name: docker-build-apk
+  #        # fyne-cross 默认会将产物放在这个深度目录下
+  #        path: fyne-cross/dist/android-arm64/Practice.apk
 
   create-release:
-    needs: [build-android, build-macos, build-docker]
+    needs: [build-android, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -211,7 +211,7 @@ jobs:
 
           # 2. 处理 Docker 版 (通用版 23MB)
           # 我们给它一个非常明确的名字
-          cp docker-build-apk/Practice.apk release_assets/Practice_docker.apk
+          # cp docker-build-apk/Practice.apk release_assets/Practice_docker.apk
 
           # 3. 处理 Native 版 (精简版 10MB)
           # 如果你依然想保留它作为备选
