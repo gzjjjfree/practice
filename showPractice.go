@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"sort"
 	"strings"
 	"time"
@@ -29,10 +30,46 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 	var singleCorrectClicked map[int]bool // 单选/判断：记录点对了的选项 (标绿)
 	var multiSubmitted bool               // 多选题：记录是否按下了提交按钮
 
+	// ==================== ✨ 核心优化 1：在闭包外定义三个固定的“外壳容器” ====================
+	topShell := container.NewStack()
+	bottomShell := container.NewStack()
+	centerShell := container.NewStack()
+
+	// ✨ 提前组装好带滑动探测功能的智能滚动条 (只创建这一次！)
+	centerScroll := container.NewVScroll(nil)
+	touchArea := NewTouchInterceptor(centerShell, centerScroll,
+		func() { // 左滑上一题
+			if state.Index > 0 {
+				state.Index--
+				refreshPracticeUI()
+			}
+		},
+		func() { // 右滑下一题
+			if state.Index < len(state.CurrentList)-1 {
+				state.Index++
+				refreshPracticeUI()
+			}
+		},
+	)
+	centerScroll.Content = touchArea
+
+	// ✨ 提前组装好整个页面的大框架，并直接设置给 Window
+	pageBg := canvas.NewRectangle(hexColor("#f0f2f5"))
+	mainContent := container.NewBorder(topShell, bottomShell, nil, nil, centerScroll)
+	mainLayout := container.NewStack(pageBg, mainContent)
+
+	marginBox := canvas.NewRectangle(color.Transparent)
+	marginBox.SetMinSize(fyne.NewSize(1, 12)) // 💡 12 是间距高度，如果你想要更大可以改成 16 或 20
+	//maincontent := container.NewBorder(getTitle(), marginBox, nil, nil, mainLayout)
+
+	// 整个页面的根节点
+	rootLayout := container.NewBorder(getTitle(), marginBox, nil, nil, mainLayout)
+	w.SetContent(rootLayout) // 🎯 整个页面生命周期中，SetContent 只执行这绝无仅有的一次
 	// 定义主布局外壳
-	mainLayout := container.NewStack()
+	//mainLayout := container.NewStack()
 
 	refreshPracticeUI = func() {
+		//fmt.Println("start refreshPracticeUI")
 		if state.Index < 0 || state.Index >= len(state.CurrentList) {
 			return
 		}
@@ -41,31 +78,57 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 		// -------------------------------------------------------------------
 		// 任务 1: 顶部导航栏 (补齐“题目列表”右侧按钮)
 		// -------------------------------------------------------------------
-		backBtn := widget.NewButton("← 返回", func() { showHome(w, state) })
 
-		// ✨ 修复问题1：重新加回右侧的“题目列表”按钮
-		listBtn := widget.NewButton("题目列表", func() {
-			showQuestionModal(w, state, refreshPracticeUI)
-		})
+		backBtn := getBox("← 返回", 90, 35, &boxColor{textColor: "#000000", bgColor: "#F0F2F5", strokeColor: "#F0F2F5", textSize: 18}, false, func() { showHome(w, state) })
+
+		// ==================== 2. 题目列表按钮调整 ====================
+		listBtn := getBox("题目列表", 90, 35, &boxColor{textColor: "#ffffff", bgColor: "#5D5D5D", strokeColor: "#5D5D5D", textSize: 18},
+			false, func() { showQuestionModal(w, state, refreshPracticeUI) })
 
 		titleLbl := canvas.NewText(state.Title, hexColor("#111111"))
 		titleLbl.TextStyle = fyne.TextStyle{Bold: true}
 		titleLbl.TextSize = 16
 
-		// 使用 Border 布局：左放返回，右放题目列表，中间居中显示模式标题
-		topNav := container.NewBorder(nil, nil, backBtn, listBtn, container.NewCenter(titleLbl))
+		// 1. ✨ 给标题本身加一个基础盒子，确保它不会受两侧按钮挤压，居中更稳固
+		titleCenter := container.NewCenter(titleLbl)
+		//titleCenter := container.NewGridWrap(fyne.NewSize(100, 30), container.NewCenter(titleLbl))
 
-		bankNameText := canvas.NewText("📖 "+state.CurrentFileName, hexColor("#333333"))
-		bankNameText.TextSize = 13
+		// 使用 Border 布局：左放返回，右放题目列表，中间居中显示模式标题
+		topNav := container.NewBorder(nil, nil, backBtn, listBtn, titleCenter)
+
+		// 2. ✨ 给整个导航条（topNav）包裹一层标准的 Padded 边距，拉开四周呼吸感
+		topNavPadded := container.NewPadded(topNav)
+
+		// 1. 设置 Label：允许换行，且文字始终保持中心对齐
+		bankNameText := widget.NewLabel("📖 " + state.CurrentFileName)
+		bankNameText.Alignment = fyne.TextAlignCenter // 🎯 保证文字在两行时也是居中的
+		bankNameText.Wrapping = fyne.TextWrapBreak    // 允许换行
+		bankNameText.SizeName = theme.SizeNameWindowButtonHeight
+
 		bankNameBg := canvas.NewRectangle(hexColor("#f7f7f7"))
 		bankNameBg.CornerRadius = 6
 		bankNameBg.StrokeColor = hexColor("#eeeeee")
 		bankNameBg.StrokeWidth = 1
-		fileNameCard := container.NewStack(
+
+		// 2. 用 Padded 撑开文字和卡片边缘的距离（上下左右的呼吸感）
+		cardContent := container.NewPadded(bankNameText)
+
+		// 3. 组合背景和内容
+		rawFileNameCard := container.NewStack(
 			bankNameBg,
-			container.NewPadded(container.NewCenter(bankNameText)),
+			cardContent,
 		)
-		topArea := container.NewVBox(topNav, container.NewPadded(fileNameCard))
+
+		// 4. ✨ 核心修正：取消 container.NewCenter！
+		// 直接再套一层 Padded 即可。
+		// 因为放在 VBox 里，它会自动撑满屏幕宽度，加上 Padded 就会在屏幕左右两边留出好看的间距。
+		fileNameCard := container.NewPadded(rawFileNameCard)
+
+		// 终极组装 topArea
+		topArea := container.NewVBox(
+			topNavPadded,
+			fileNameCard,
+		)
 
 		// -------------------------------------------------------------------
 		// 任务 2: 题目标签行 (全局序号优化版：使用 Question.ID)
@@ -108,12 +171,6 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 
 		metaRight := container.NewHBox(starBtn, diffTag)
 		metaRow := container.NewBorder(nil, nil, metaLeft, metaRight, nil)
-
-		//practiceMode, _, _ := strings.Cut(state.Title, " - ")
-
-		//if practiceMode == "修正题目" {
-		//	correctionCard := renderCorrectionCard(w, state)
-		//} else {
 
 		// -------------------------------------------------------------------
 		// 🌟 状态重置与历史记录恢复机制 (解决翻页或重新打开后痕迹消失的问题)
@@ -190,13 +247,26 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 		// 任务 3: 题干区 (清洗隐藏换行符，彻底消除脱节)
 		// -------------------------------------------------------------------
 		stemText := fmt.Sprintf("%d. %s", state.Index+1, q.Content)
-		// fmt.Println("stemText: ", stemText)
-		stemLbl := widget.NewLabel(stemText)
-		stemLbl.TextStyle = fyne.TextStyle{Bold: true}
+
+		// ✨ 终极正解：使用 Fyne 富文本自带的“副标题”样式
+		// RichTextStyleSubHeading 在 Fyne 的底层主题中被硬编码为“大号字体 + 加粗”
+		stemLbl := widget.NewRichText(
+			&widget.TextSegment{
+				Style: widget.RichTextStyleSubHeading, // 🎯 调大字号且加粗的核心
+				Text:  stemText,
+			},
+		)
+
+		// 🎯 开启富文本的强制换行保护，防止长题目被截断
 		stemLbl.Wrapping = fyne.TextWrapBreak
 
 		// ==================== 选项渲染与交互逻辑 ====================
 		optionsBox := container.NewVBox()
+
+		marginBox := canvas.NewRectangle(color.Transparent)
+		marginBox.SetMinSize(fyne.NewSize(1, 15)) // 💡 12 是间距高度，如果你想要更大可以改成 16 或 20
+		optionsBox.Add(marginBox)
+		marginBox.SetMinSize(fyne.NewSize(1, 5))
 
 		if q.Type == "填空题" || q.Type == "问答题" {
 			// ✨ 逻辑 1: 背题模式
@@ -205,7 +275,8 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 				btnText = "点击隐藏答案"
 			}
 
-			lblA := widget.NewLabel(btnText)
+			lblA := canvas.NewText(btnText, hexColor("#333333"))
+			lblA.TextSize = 18 // 调大字体
 			lblA.Alignment = fyne.TextAlignCenter
 			lblA.TextStyle = fyne.TextStyle{Bold: true}
 
@@ -215,9 +286,10 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 			}
 			bgA.CornerRadius = 6
 
-			cardA := NewClickableBox(container.NewStack(bgA, container.NewPadded(lblA)), func() {
+			// ✨ 注意：canvas.Text 没有 Alignment 属性，必须通过包裹 container.NewCenter 来居中
+			cardA := NewClickableBox(container.NewStack(bgA, container.NewPadded(container.NewCenter(lblA))), func() {
 				isMemorizeRevealed = !isMemorizeRevealed
-				refreshPracticeUI() // 重绘，触发选项 B 的显示或隐藏
+				refreshPracticeUI()
 			})
 			optionsBox.Add(cardA)
 
@@ -229,11 +301,7 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 					ansStr = q.Options[0].Text // 取出带有顿号的完整文本
 				}
 
-				lblB := widget.NewLabel(ansStr)
-				if q.Type == "填空题" {
-					lblB.Alignment = fyne.TextAlignCenter
-				}
-				lblB.Wrapping = fyne.TextWrapBreak
+				lblB := createOptionLabel(ansStr)
 
 				bgB := canvas.NewRectangle(hexColor("#E8F5E8"))
 				bgB.StrokeColor = hexColor("#06a050") // 绿色边框高亮
@@ -249,6 +317,10 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 
 		} else {
 			// ✨ 逻辑 2 & 3: 单选、多选、判断题
+
+			// 🎯 新增核心逻辑：判断当前单选/判断题是否已经作答（只要有对/错记录就算已答）
+			hasSingleAnswered := len(singleCorrectClicked) > 0 || len(singleWrongClicked) > 0
+
 			for i, opt := range q.Options {
 				optIndex := i
 				optStr := opt.Text
@@ -257,12 +329,13 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 				}
 
 				optLetter := string(rune('A' + optIndex))
-				optPrefix := optLetter + "."
+				optPrefix := optLetter + ". "
 
 				prefixLbl := widget.NewLabel(optPrefix)
 				prefixLbl.TextStyle = fyne.TextStyle{Bold: true}
+				prefixLbl.SizeName = theme.SizeNameSubHeadingText
 
-				contentLbl := widget.NewLabel(optStr)
+				contentLbl := createOptionLabel(optStr)
 				contentLbl.Alignment = fyne.TextAlignCenter
 				contentLbl.Wrapping = fyne.TextWrapBreak
 
@@ -289,29 +362,25 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 				if q.Type == "多选题" {
 					if multiSubmitted {
 						if isCorrectAnswer {
-							// 只要是正确答案，背景一律变为正确色 (#5aeb55)
+							// 只要是正确答案，背景一律变为正确色
 							bgColorStr = "#E8F5E8"
 
 							if multiSelected[optIndex] {
-								// 1. 已选择的正确选项
 								rightIconText.Text = "✓"
-								iconColorStr = greenColor   // 绿勾
-								strokeColorStr = greenColor // 绿边框
+								iconColorStr = greenColor
+								strokeColorStr = greenColor
 							} else {
-								// 2. 没选择的正确选项（漏选）
 								rightIconText.Text = "✕"
-								iconColorStr = "#ff4d4f"   // 红叉
-								strokeColorStr = "#ff4d4f" // 红边框
+								iconColorStr = "#ff4d4f"
+								strokeColorStr = "#ff4d4f"
 							}
 						} else {
 							if multiSelected[optIndex] {
-								// 3. 已选择的错误选项（错选）
-								bgColorStr = "#FFEBEE" // 错误背景色
+								bgColorStr = "#FFEBEE"
 								rightIconText.Text = "✕"
-								iconColorStr = "#ff4d4f"   // 红叉
-								strokeColorStr = "#ff4d4f" // 红边框
+								iconColorStr = "#ff4d4f"
+								strokeColorStr = "#ff4d4f"
 							}
-							// 4. 不是正确答案且用户没选的，保持默认 bgColorStr = "#f9f9f9"
 						}
 					} else if multiSelected[optIndex] {
 						bgColorStr = "#e6f7ff" // 未提交前的浅蓝色选定状态
@@ -321,18 +390,17 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 					if singleWrongClicked[optIndex] {
 						bgColorStr = "#FFEBEE"
 						rightIconText.Text = "✕"
-						iconColorStr = "#ff4d4f"   // 红叉
-						strokeColorStr = "#ff4d4f" // 红边框
+						iconColorStr = "#ff4d4f"
+						strokeColorStr = "#ff4d4f"
 					}
 					if singleCorrectClicked[optIndex] {
 						bgColorStr = "#E8F5E8"
 						rightIconText.Text = "✓"
-						iconColorStr = greenColor   // 绿勾
-						strokeColorStr = greenColor // 绿边框
+						iconColorStr = greenColor
+						strokeColorStr = greenColor
 					}
 				}
 
-				// ✨ 将计算出来的颜色状态，精准灌入到各自的组件属性中
 				rightIconText.Color = hexColor(iconColorStr)
 
 				optLayout := container.NewBorder(nil, nil, prefixLbl, container.NewCenter(rightIconText), contentLbl)
@@ -344,23 +412,27 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 
 				// == 封装点击事件 ==
 				optCard := NewClickableBox(container.NewStack(optBg, container.NewPadded(optLayout)), func() {
-					// 锁定保护：选对后或多选提交后，屏蔽点击
-					if singleCorrectClicked[optIndex] || multiSubmitted {
-						return
+
+					// 🎯 核心锁定拦截
+					if q.Type == "多选题" && multiSubmitted {
+						return // 多选题一旦提交，全盘锁定
+					}
+					if q.Type != "多选题" && hasSingleAnswered {
+						return // 单选/判断一旦点过（无论对错），全盘锁定
 					}
 
 					if q.Type == "多选题" {
-						multiSelected[optIndex] = !multiSelected[optIndex] // 切换选中状态
+						multiSelected[optIndex] = !multiSelected[optIndex]
 						refreshPracticeUI()
 					} else {
 						// 单选/判断：实时判定
-						handleUserSelectOption(state, q, optLetter) // 落盘
+						handleUserSelectOption(state, q, optLetter)
 
 						if isCorrectAnswer {
 							singleCorrectClicked[optIndex] = true
 							refreshPracticeUI() // 瞬间变绿
 
-							// 🌟 开启协程，延迟 350 毫秒后自动跳下一题
+							// 🌟 开启协程，延迟后自动跳下一题
 							go func() {
 								time.Sleep(350 * time.Millisecond)
 								if state.Index < len(state.CurrentList)-1 {
@@ -370,93 +442,98 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 							}()
 						} else {
 							singleWrongClicked[optIndex] = true
+
+							// 💡 优化：既然用户答错了且选项被锁定，直接把正确的答案标绿提示出来
+							for _, correctLetter := range q.Answers {
+								if len(correctLetter) == 1 {
+									cIdx := int(correctLetter[0] - 'A')
+									singleCorrectClicked[cIdx] = true
+								}
+							}
+
 							refreshPracticeUI() // 变红，留在本题
 						}
 					}
 				})
 
 				optionsBox.Add(optCard)
+
+				optionsBox.Add(marginBox)
 			}
 		}
-		//}
 
 		// -------------------------------------------------------------------
 		// 任务 4: 答题控制按钮组
 		// -------------------------------------------------------------------
-		prevBtn := widget.NewButton("上一题", func() {
+
+		// 渲染“上一题”：直接将 state.Index == 0 作为禁用条件传入
+		prevBtn := getBox("上一题", 100, 35, &boxColor{textColor: "#ffffff", bgColor: "#418BEC", strokeColor: "#418BEC", textSize: 18}, state.Index == 0, func() {
 			if state.Index > 0 {
 				state.Index--
 				refreshPracticeUI()
 			}
 		})
-		if state.Index == 0 {
-			prevBtn.Disable()
-		}
 
-		nextBtn := widget.NewButton("下一题", func() {
-			if state.Index < len(state.CurrentList)-1 {
-				state.Index++
-				refreshPracticeUI()
-			}
-		})
-		if state.Index == len(state.CurrentList)-1 {
-			nextBtn.Disable()
-		}
-
-		// ✨ 多选题提交逻辑
-		submitBtn := widget.NewButton("提交", func() {
-			if multiSubmitted || len(multiSelected) == 0 {
-				return
-			}
-
-			// 1. 收集用户点了哪些选项
-			var userAnsList []string
-			for i := range q.Options {
-				if multiSelected[i] {
-					userAnsList = append(userAnsList, string(rune('A'+i)))
-				}
-			}
-
-			// 2. 将数组连成 "A,B,C" 落盘打分
-			userAnsStr := strings.Join(userAnsList, ",")
-			handleUserSelectOption(state, q, userAnsStr)
-
-			// 3. 标记为已提交，并判定是否全对
-			multiSubmitted = true
-
-			sort.Strings(userAnsList)
-			correctList := make([]string, len(q.Answers))
-			copy(correctList, q.Answers)
-			sort.Strings(correctList)
-
-			isAllCorrect := len(userAnsList) == len(correctList)
-			if isAllCorrect {
-				for i := range userAnsList {
-					if userAnsList[i] != correctList[i] {
-						isAllCorrect = false
-						break
-					}
-				}
-			}
-
-			refreshPracticeUI() // 瞬间重绘，显示红绿校验结果
-
-			// 4. 如果全对，延迟翻页
-			if isAllCorrect {
-				go func() {
-					time.Sleep(500 * time.Millisecond) // 多选题看结果的时间稍长一点
-					if state.Index < len(state.CurrentList)-1 {
-						state.Index++
-					}
+		//nextBtn := widget.NewButton("下一题", func() {
+		//	if state.Index < len(state.CurrentList)-1 {
+		//		state.Index++
+		//		refreshPracticeUI()
+		//	}
+		//})
+		//if state.Index == len(state.CurrentList)-1 {
+		//	nextBtn.Disable()
+		//}
+		// 渲染“下一题”：将 state.Index == 最后一题 作为禁用条件传入
+		nextBtn := getBox("下一题", 100, 35, &boxColor{textColor: "#ffffff", bgColor: "#418BEC", strokeColor: "#418BEC", textSize: 18},
+			state.Index >= len(state.CurrentList)-1, func() {
+				if state.Index < len(state.CurrentList)-1 {
+					state.Index++
 					refreshPracticeUI()
-				}()
-			}
-		})
+				}
+			})
 
-		// ✨ 新增拦截：如果是修正模式，强制禁用多选题的“提交”按钮（因为不需要答题判卷）
-		if q.Type != "多选题" || strings.Contains(state.Title, "修正题目") {
-			submitBtn.Disable()
-		}
+		submitBtn := getBox("提交", 100, 35, &boxColor{textColor: "#ffffff", bgColor: "#418BEC", strokeColor: "#418BEC", textSize: 18},
+			q.Type != "多选题" || strings.Contains(state.Title, "修正题目"), func() {
+				if multiSubmitted || len(multiSelected) == 0 {
+					return
+				}
+				// 1. 收集用户点了哪些选项
+				var userAnsList []string
+				for i := range q.Options {
+					if multiSelected[i] {
+						userAnsList = append(userAnsList, string(rune('A'+i)))
+					}
+				}
+				// 2. 将数组连成 "A,B,C" 落盘打分
+				userAnsStr := strings.Join(userAnsList, ",")
+				handleUserSelectOption(state, q, userAnsStr)
+				// 3. 标记为已提交，并判定是否全对
+				multiSubmitted = true
+				sort.Strings(userAnsList)
+				correctList := make([]string, len(q.Answers))
+				copy(correctList, q.Answers)
+				sort.Strings(correctList)
+				isAllCorrect := len(userAnsList) == len(correctList)
+				if isAllCorrect {
+					for i := range userAnsList {
+						if userAnsList[i] != correctList[i] {
+							isAllCorrect = false
+							break
+						}
+					}
+				}
+				refreshPracticeUI() // 瞬间重绘，显示红绿校验结果
+				// 4. 如果全对，延迟翻页
+				if isAllCorrect {
+					go func() {
+						time.Sleep(500 * time.Millisecond) // 多选题看结果的时间稍长一点
+						if state.Index < len(state.CurrentList)-1 {
+							state.Index++
+						}
+						refreshPracticeUI()
+					}()
+				}
+			})
 
 		navGrid := container.NewGridWithColumns(3, prevBtn, submitBtn, nextBtn)
 
@@ -495,7 +572,31 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 		cardStack := container.NewStack(cardBg, container.NewPadded(questionContent))
 
 		// 允许长题目内容滚动
-		centerScroll := container.NewScroll(container.NewPadded(cardStack))
+		//centerShell = container.NewPadded(cardStack)
+		//centerScroll := container.NewScroll(container.NewPadded(cardStack))
+		// ✨ 核心接入：使用智能滑动滚动条替换普通的 container.NewScroll
+		// 1. ✨ 先创建一个空的外层垂直滚动条
+		//centerScroll := container.NewVScroll(nil)
+		//touchArea := NewTouchInterceptor(container.NewPadded(cardStack), centerScroll,
+		//	//centerScroll := NewSwipeScroll(container.NewPadded(cardStack),
+		//	// 👈 触发向左滑动时的动作（上一题）
+		//	func() {
+		//		if state.Index > 0 {
+		//			state.Index--
+		//			refreshPracticeUI()
+		//		}
+		//	},
+		//	// 👉 触发向右滑动时的动作（下一题）
+		//	func() {
+		//		if state.Index < len(state.CurrentList)-1 {
+		//			state.Index++
+		//			refreshPracticeUI()
+		//		}
+		//	},
+		//)
+
+		// 3. ✨ 将配置好翻页逻辑的探测器，正式塞入滚动条中
+		//centerScroll.Content = touchArea
 
 		// -------------------------------------------------------------------
 		// 任务 5: 底部统计与操作区 (全自动化持久化版)
@@ -508,32 +609,29 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 
 		statsText := fmt.Sprintf("总数: %d             ✓: %d             ✕: %d", wCount, mCorrect, nWrong)
 		statsLbl := canvas.NewText(statsText, hexColor("#555555"))
-		statsLbl.TextSize = 14
+		statsLbl.TextSize = 16
 
 		statsBg := canvas.NewRectangle(hexColor("#f7f7f7"))
-		statsRow := container.NewStack(statsBg, container.NewCenter(statsLbl))
+		sizeBox := container.NewGridWrap(fyne.NewSize(400, 36))
+		statsRow := container.NewStack(statsBg, sizeBox, container.NewCenter(statsLbl))
 
-		returnTypeBtn := widget.NewButton("返回题型", func() {
+		returnTypeBtn := getBox("返回题型", 100, 35, &boxColor{textColor: "#ffffff", bgColor: "#5D5D5D", strokeColor: "#5D5D5D", textSize: 18}, false, func() {
 			backFunc(w, state)
 		})
-
 		// ✨ 新增：“删除本题”按钮
-		delCurrentDataBtn := widget.NewButton("删除本题", func() {
-			dialog.ShowConfirm("提示", "确定要将本题从当前练习集中移除吗？", func(confirm bool) {
-				if confirm {
-					// 这里的具体删除逻辑一会讨论（例如从 state.CurrentList 中移除当前 Index 题目）
-					refreshPracticeUI()
-				}
-			}, w)
-		})
+		delCurrentDataBtn := getBox("删除本题", 100, 35, &boxColor{textColor: "#ffffff", bgColor: "#5D5D5D", strokeColor: "#5D5D5D", textSize: 18},
+			!strings.Contains(state.Title, "错题练习") && !strings.Contains(state.Title, "修正题目"), func() {
+				dialog.ShowConfirm("提示", "确定要将本题从当前练习集中移除吗？", func(confirm bool) {
+					if confirm {
+						// 这里的具体删除逻辑一会讨论（例如从 state.CurrentList 中移除当前 Index 题目）
+						refreshPracticeUI()
+					}
+				}, w)
+			})
 
 		// 💡 核心控制：只有在“错题练习”或“修正题目”模式下才激活该按钮
 		// 判定标准根据你传入 state.Title 的文本或专门的模式状态字段
-		if !strings.Contains(state.Title, "错题练习") && !strings.Contains(state.Title, "修正题目") {
-			delCurrentDataBtn.Disable() // 其他普通模式下自动变灰、锁死无法点击
-		}
-
-		delRecordBtn := widget.NewButton("删除记录", func() {
+		delRecordBtn := getBox("删除记录", 100, 35, &boxColor{textColor: "#ffffff", bgColor: "#5D5D5D", strokeColor: "#5D5D5D", textSize: 18}, false, func() {
 			dialog.ShowConfirm("提示", "确定要清空本次练习的所有答题记录和对错统计吗？", func(confirm bool) {
 				if confirm {
 					clearPracticeRecords(state)
@@ -550,19 +648,46 @@ func showPractice(w fyne.Window, state *AppState, backFunc func(fyne.Window, *Ap
 		// -------------------------------------------------------------------
 		// 最终组装
 		// -------------------------------------------------------------------
-		pageBg := canvas.NewRectangle(hexColor("#f0f2f5"))
+		//pageBg := canvas.NewRectangle(hexColor("#f0f2f5"))
+
+		topShell.Objects = []fyne.CanvasObject{topArea}
+		topShell.Refresh()
+
+		bottomShell.Objects = []fyne.CanvasObject{bottomArea}
+		bottomShell.Refresh()
+
+		centerShell.Objects = []fyne.CanvasObject{container.NewPadded(cardStack)}
+		centerShell.Refresh()
 
 		// 使用 Border 布局：Top 放导航栏，Bottom 放底栏，中间 Center 让题目卡片自适应填充并滚动
-		mainContent := container.NewBorder(topArea, bottomArea, nil, nil, centerScroll)
-
-		mainLayout.Objects = []fyne.CanvasObject{pageBg, mainContent}
-		mainLayout.Refresh()
+		//mainContent := container.NewBorder(topArea, bottomArea, nil, nil, centerScroll)
+		//
+		//mainLayout.Objects = []fyne.CanvasObject{pageBg, mainContent}
+		//mainLayout.Refresh()
+		//fmt.Println("finish refreshPracticeUI")
 	}
+
+	// ✨ 核心接入：用滑动容器包裹主内容，并注入翻页逻辑
+	//swipeableContent := NewSwipeableBox(maincontent,
+	//	// 👈 触发向左滑动时的动作（按你的要求：上一题）
+	//	func() {
+	//		if state.Index > 0 {
+	//			state.Index--
+	//			refreshPracticeUI()
+	//		}
+	//	},
+	//	// 👉 触发向右滑动时的动作（按你的要求：下一题）
+	//	func() {
+	//		if state.Index < len(state.CurrentList)-1 {
+	//			state.Index++
+	//			refreshPracticeUI()
+	//		}
+	//	},
+	//)
 
 	// 触发首次渲染
 	refreshPracticeUI()
-
-	w.SetContent(mainLayout)
+	//w.SetContent(maincontent)
 }
 
 // ==================== 题目导航列表弹窗 ====================

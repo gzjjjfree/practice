@@ -12,6 +12,8 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 )
 
 // ==================== 辅助工具 ====================
@@ -146,13 +148,35 @@ func deleteBank(w fyne.Window, state *AppState) {
 		return // 没找到，安全拦截
 	}
 
-	// 2. 执行物理删除（从本地存储中删除对应的 JSON 文件）
+	// 2. 执行物理删除（从本地存储中删除对应的 JSON 主文件）
 	storageDir := fyne.CurrentApp().Storage().RootURI().Path()
 	err := os.Remove(filepath.Join(storageDir, targetStorageKey+".json"))
 	if err != nil && !os.IsNotExist(err) {
 		dialog.ShowInformation("[DEBUG ❌]", fmt.Sprintf("删除题库错误: %v\n", err), w)
 		return
 	}
+
+	// ==================== ✨ 新增：连带删除相关衍生文件 ====================
+	// 根据 saveSetToLocal 的逻辑，衍生文件是以 CurrentFileName + "_" + suffix 命名的
+	// 我们遍历目录，精准匹配并清理这些伴生文件
+	if state.CurrentFileName != "" {
+		files, readErr := os.ReadDir(storageDir)
+		if readErr == nil {
+			for _, f := range files {
+				if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+					continue
+				}
+				fileName := f.Name()
+				// 检查文件名前缀是否匹配，并且包含指定的衍生关键字
+				if strings.HasPrefix(fileName, state.CurrentFileName+"_") &&
+					(strings.Contains(fileName, "错题") || strings.Contains(fileName, "收藏") || strings.Contains(fileName, "记录")) {
+
+					_ = os.Remove(filepath.Join(storageDir, fileName))
+				}
+			}
+		}
+	}
+	// ======================================================================
 
 	// 3. 从内存的 StoredFiles 列表中彻底移除该 Key
 	state.StoredFiles = append(state.StoredFiles[:targetIndex], state.StoredFiles[targetIndex+1:]...)
@@ -172,7 +196,6 @@ func deleteBank(w fyne.Window, state *AppState) {
 		}
 
 		// 触发加载算出来的下一个题库
-		// (需要结合你现有的本地读取函数，例如从文件读取 JSON 并解析)
 		loadAndRenderBank(w, state, nextBankKey)
 
 	} else {
@@ -185,7 +208,7 @@ func deleteBank(w fyne.Window, state *AppState) {
 		// 务必同步清空偏好记录，防止下次打开 APP 时报错
 		fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", "")
 
-		// 刷新主页 UI，显示空状态（请替换为你实际刷新 UI 的函数）
+		// 刷新主页 UI，显示空状态
 		// refreshHomeUI()
 	}
 }
@@ -231,4 +254,22 @@ func loadAndRenderBank(w fyne.Window, state *AppState, targetKey string) {
 	}
 	// 2. 更新偏好设置
 	//fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", targetKey)
+}
+
+// 提取出来的创建完美 Label 的函数
+func createOptionLabel(optStr string) *widget.Label {
+	label := widget.NewLabel(optStr)
+
+	// 1. 居中对齐
+	label.Alignment = fyne.TextAlignCenter
+
+	// 2. 自动换行
+	label.Wrapping = fyne.TextWrapBreak
+
+	// 3. ✨ Fyne 2.6 新特性：设置字体大小
+	// 你可以使用 theme.SizeNameSubHeading (通常对应 18px 左右的效果)
+	// 或者 theme.SizeNameHeading (更大，通常对应 24px)
+	label.SizeName = theme.SizeNameSubHeadingText
+
+	return label
 }

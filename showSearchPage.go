@@ -53,9 +53,9 @@ func showSearchPage(w fyne.Window, state *AppState, goBack func()) {
 	// ==================== 1. 页面基础状态 ====================
 	pageBg := canvas.NewRectangle(hexColor("#f5f5f5"))
 
-	backBtn := widget.NewButton("← 返回", func() { goBack() })
-	navBar := container.NewBorder(nil, nil, backBtn, nil,
-		widget.NewLabelWithStyle("搜索本题库", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
+	//backBtn := widget.NewButton("← 返回", func() { goBack() })
+	backBtn := getBox("← 返回", 90, 35, &boxColor{textColor: "#000000", bgColor: "#F0F2F5", strokeColor: "#F0F2F5", textSize: 18}, false, func() { goBack() })
+	navBar := container.NewBorder(getTitle(), nil, backBtn, widget.NewLabelWithStyle("搜索本题库", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
 
 	keyword := ""
 	selectedType := "全部题型"
@@ -258,6 +258,8 @@ func showSearchPage(w fyne.Window, state *AppState, goBack func()) {
 		navBar, nil, nil, nil,
 		container.NewStack(pageBg, container.NewBorder(topBox, nil, nil, nil, scrollResults)),
 	)
+
+	//mainLayout := container.NewBorder(getTitle(), mainLayoutBox, nil, nil)
 	w.SetContent(mainLayout)
 
 	// 初始化如果本身带有状态，可以执行一次空检索

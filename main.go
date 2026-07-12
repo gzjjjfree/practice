@@ -139,6 +139,12 @@ func refreshLocalFilesList(state *AppState) {
 
 	for _, f := range files {
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
+
+			// 🛑 【核心过滤】：屏蔽掉错题集和收藏集，防止它们作为独立题库被展示
+			if strings.Contains(f.Name(), "错题") || strings.Contains(f.Name(), "收藏") || strings.Contains(f.Name(), "答题记录") {
+				continue
+			}
+
 			name := strings.TrimSuffix(f.Name(), ".json")
 			// 假设 key 格式为: 类型Data_文件名_时间戳
 			parts := strings.Split(name, "_")
@@ -151,7 +157,6 @@ func refreshLocalFilesList(state *AppState) {
 	}
 
 	// 🔥 核心：全局按时间戳从小到大排序，然后倒序
-	// 使用 sort 包进行显式排序
 	sort.Slice(fileList, func(i, j int) bool {
 		return fileList[i].Timestamp < fileList[j].Timestamp
 	})
@@ -169,14 +174,6 @@ func refreshLocalFilesList(state *AppState) {
 func showHome(w fyne.Window, state *AppState) {
 	fmt.Println("in showHome")
 	var refreshHomeUI func()
-
-	// ✨ 修复问题 1：在移动端显式绘制一个 App 顶部大标题导航栏
-	appTitleText := canvas.NewText("📖 题库练习系统", hexColor("#000000"))
-	appTitleText.TextSize = 22
-	appTitleText.Alignment = fyne.TextAlignCenter
-
-	// 给标题增加一些上下边距，让它看起来更美观
-	appTitleBox := container.NewPadded(container.NewVBox(layout.NewSpacer(), appTitleText, layout.NewSpacer()))
 
 	makeCustomGridBtn := func(icon, text string, action func()) *ClickableBox {
 		iconLbl := canvas.NewText(icon, hexColor("#222222"))
@@ -209,74 +206,161 @@ func showHome(w fyne.Window, state *AppState) {
 			if reader == nil {
 				return
 			}
-			defer reader.Close()
 
-			fileName := reader.URI().Name()
-			progDialog := dialog.NewCustomWithoutButtons("读取中", widget.NewProgressBarInfinite(), w)
-			progDialog.Show()
+			// 保存用户选中的原始文件名
+			originalFileName := reader.URI().Name()
 
+			// ✨ 先把字节流读取到内存，然后立刻关闭资源，防止异步弹窗导致的句柄泄漏
 			fileBytes, readErr := io.ReadAll(reader)
+			reader.Close()
+
 			if readErr != nil {
-				progDialog.Hide()
 				dialog.ShowError(fmt.Errorf("流读取失败: %v", readErr), w)
 				return
 			}
 
-			// 🔥【关键接入点】：如果扩展名是 xls 且题库量看起来很大，进行转换
-			if strings.ToLower(filepath.Ext(fileName)) == ".xls" {
-				// 你可以根据需要加个判断：比如只有 fileBytes 大小超过 50KB 时才转
-				newBytes, convErr := ConvertXlsToXlsxBytes(fileBytes)
-				if convErr == nil {
-					fileBytes = newBytes
-					fileName = strings.TrimSuffix(fileName, ".xls") + ".xlsx"
-					fmt.Println("检测到旧版 XLS，已自动无损升级为 XLSX")
+			storageDir := fyne.CurrentApp().Storage().RootURI().Path()
+
+			// ==================== 1. 扫描是否已有同名旧文件 ====================
+			files, _ := os.ReadDir(storageDir)
+			var oldFileNames []string
+
+			// 寻找命名中包含 "_原始文件名_" 的旧 JSON 文件
+			searchPattern := "_" + originalFileName + "_"
+			for _, f := range files {
+				if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
+					if strings.Contains(f.Name(), searchPattern) {
+						oldFileNames = append(oldFileNames, f.Name())
+					}
 				}
 			}
 
-			timestamp := time.Now().UnixNano() / int64(time.Millisecond)
-			fileExt := strings.ToLower(getFileExtension(fileName))
-			storageKey := fmt.Sprintf("%sData_%s_%d", fileExt, fileName, timestamp)
+			// ==================== 2. 定义核心处理与落盘逻辑 ====================
+			// 参数 isNewAlias: true表示用户选择了"新增", false表示"覆盖"或"初次读取"
+			processAndSave := func(isNewAlias bool) {
+				fileName := originalFileName
 
-			os.WriteFile(storageKey+".json", fileBytes, 0644)
+				if isNewAlias {
+					// ====== 新增逻辑：计算并分配 (1), (2) 这样的自增别名 ======
+					ext := filepath.Ext(fileName)
+					baseName := strings.TrimSuffix(fileName, ext)
+					counter := 1
+					for {
+						testFileName := fmt.Sprintf("%s(%d)%s", baseName, counter, ext)
+						testPattern := "_" + testFileName + "_"
+						exists := false
+						for _, f := range files {
+							if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
+								if strings.Contains(f.Name(), testPattern) {
+									exists = true
+									break
+								}
+							}
+						}
+						if !exists {
+							fileName = testFileName // 找到了没有被使用的名字
+							break
+						}
+						counter++
+					}
+				} else {
+					// ====== 覆盖逻辑：物理删除发现的所有旧版同名文件 ======
+					for _, oldName := range oldFileNames {
+						_ = os.Remove(filepath.Join(storageDir, oldName))
+					}
+				}
 
-			// 触发内存解析引擎
-			bankData, parseErr := ParseBytesToBank(fileBytes, fileName, storageKey)
-			// 记录最后一次打开的题库 Key
-			fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", storageKey)
+				progDialog := dialog.NewCustomWithoutButtons("读取中", widget.NewProgressBarInfinite(), w)
+				progDialog.Show()
 
-			progDialog.Hide()
+				// 🔥【关键接入点】：如果扩展名是 xls，进行无损转换
+				if strings.ToLower(filepath.Ext(fileName)) == ".xls" {
+					newBytes, convErr := ConvertXlsToXlsxBytes(fileBytes)
+					if convErr == nil {
+						fileBytes = newBytes
+						fileName = strings.TrimSuffix(fileName, ".xls") + ".xlsx"
+						fmt.Println("检测到旧版 XLS，已自动无损升级为 XLSX")
+					}
+				}
 
-			if parseErr != nil {
-				dialog.ShowError(fmt.Errorf("解析异常: %v", parseErr), w)
-				return
+				timestamp := time.Now().UnixNano() / int64(time.Millisecond)
+				fileExt := strings.ToLower(getFileExtension(fileName))
+				storageKey := fmt.Sprintf("%sData_%s_%d", fileExt, fileName, timestamp)
+
+				// 触发内存解析引擎
+				bankData, parseErr := ParseBytesToBank(fileBytes, fileName, storageKey)
+				fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", storageKey)
+
+				progDialog.Hide()
+
+				if parseErr != nil {
+					dialog.ShowError(fmt.Errorf("解析异常: %v", parseErr), w)
+					return
+				}
+
+				// 转换为真正的 JSON 文本再落盘
+				jsonData, marshalErr := json.Marshal(bankData)
+				if marshalErr != nil {
+					dialog.ShowError(fmt.Errorf("转换为JSON失败: %v", marshalErr), w)
+					return
+				}
+
+				absoluteSavePath := filepath.Join(storageDir, storageKey+".json")
+				err = os.WriteFile(absoluteSavePath, jsonData, 0644)
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("存储本地失败: %v", err), w)
+					return
+				}
+
+				state.CurrentStorageKey = bankData.StorageKey
+				state.CurrentFileName = bankData.DisplayName
+
+				syncQuestionsToState(state, bankData)
+				refreshLocalFilesList(state)
+				refreshHomeUI()
 			}
 
-			// 🔥【核心修正点】：不能直接存入原始文件字节流 fileBytes！
-			// 必须把解析成功、规整好结构的 bankData 转换为真正的 JSON 文本再落盘
-			jsonData, marshalErr := json.Marshal(bankData)
-			if marshalErr != nil {
-				dialog.ShowError(fmt.Errorf("转换为JSON失败: %v", marshalErr), w)
-				return
+			// ==================== 3. 触发三选项提示或直接读取 ====================
+			if len(oldFileNames) > 0 {
+				// 定义自定义弹窗的句柄（以便在按钮点击时能关掉它）
+				var confirmDialog dialog.Dialog
+
+				// 按钮 1：取消
+				cancelBtn := widget.NewButton(" 取消 ", func() {
+					confirmDialog.Hide() // 默默关闭，不执行任何落盘逻辑
+				})
+
+				// 按钮 2：覆盖 (标记为红色警示)
+				overwriteBtn := widget.NewButton(" 覆盖 ", func() {
+					confirmDialog.Hide()
+					processAndSave(false) // 传入 false，执行删除旧文件逻辑
+				})
+				overwriteBtn.Importance = widget.DangerImportance
+
+				// 按钮 3：新增 (标记为蓝色推荐)
+				addBtn := widget.NewButton(" 新增 ", func() {
+					confirmDialog.Hide()
+					processAndSave(true) // 传入 true，执行自增别名逻辑
+				})
+				addBtn.Importance = widget.HighImportance
+
+				// ✨ 使用 HBox 将三个按钮横向排列，并用 Spacer 挤到右侧（或居中）
+				buttons := container.NewHBox(layout.NewSpacer(), cancelBtn, overwriteBtn, addBtn, layout.NewSpacer())
+
+				msgLbl := widget.NewLabel(fmt.Sprintf("题库列表中已存在名为【%s】的文件。\n\n请选择接下来的操作：", originalFileName))
+
+				// 组合文本和按钮区域
+				content := container.NewVBox(msgLbl, buttons)
+
+				// 渲染并显示这个不带默认按钮的极客弹窗
+				confirmDialog = dialog.NewCustomWithoutButtons("文件已存在", content, w)
+				confirmDialog.Show()
+
+			} else {
+				// 如果不存在同名文件，直接走普通的初次读取逻辑
+				processAndSave(false)
 			}
 
-			storageDir := fyne.CurrentApp().Storage().RootURI().Path()
-			absoluteSavePath := filepath.Join(storageDir, storageKey+".json")
-
-			// ✨ 存储真正的 JSON 数据
-			err = os.WriteFile(absoluteSavePath, jsonData, 0644)
-			if err != nil {
-				dialog.ShowError(fmt.Errorf("存储本地失败: %v", err), w)
-				return
-			}
-
-			state.CurrentStorageKey = bankData.StorageKey
-			state.CurrentFileName = bankData.DisplayName
-
-			syncQuestionsToState(state, bankData)
-			refreshLocalFilesList(state)
-			refreshHomeUI()
-
-			// dialog.ShowInformation("提示", fmt.Sprintf("题库【%s】加载成功！", bankData.DisplayName), w)
 		}, w)
 
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".xlsx", ".xls", ".txt", ".json"}))
@@ -387,12 +471,13 @@ func showHome(w fyne.Window, state *AppState) {
 	currentFileTitleLbl := widget.NewLabelWithStyle("当前选中的题库:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	currentFileNameLbl := widget.NewLabel("未选择题库")
 	currentFileNameLbl.TextStyle = fyne.TextStyle{Italic: true}
+	currentFileNameLbl.Wrapping = fyne.TextWrapBreak
 
 	listTitle := widget.NewLabelWithStyle("已存储的文件列表 (点击切换):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
 	// 将显式标题组装进顶部的核心控制区
 	topAndMiddleBox := container.NewVBox(
-		appTitleBox, // 👈 挂载大标题
+		getTitle(), // 👈 挂载大标题
 		widget.NewSeparator(),
 		grid,
 		widget.NewSeparator(),
