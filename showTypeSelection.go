@@ -15,33 +15,7 @@ import (
 
 // ==================== 题型选择中间页 (带模式标签版) ====================
 func showTypeSelection(w fyne.Window, state *AppState, practiceMode string) {
-	// practiceMode 传入 "顺序练习" 或 "随机练习"
-
-	// 1. 顶部导航栏组件
-	//backBtn := widget.NewButton("← 返回", func() {
-	//	showHome(w, state)
-	//})
-	//backBtnText := canvas.NewText("返回", hexColor("#333333"))
-	//backBtnText.TextSize = 18
-	//backBtnText.TextStyle = fyne.TextStyle{Bold: true}
-	//
-	//backBtnBg := canvas.NewRectangle(hexColor("#f0f0f0"))
-	//backBtnBg.CornerRadius = 4
-	//backBtnBg.StrokeColor = hexColor("#d9d9d9")
-	//backBtnBg.StrokeWidth = 1
-	//
-	//// ✨ 修正点：使用 container.NewGridWrap 强行固定包裹框的尺寸
-	//// 这样文字居中后，四周就会被稳稳地撑开自定义的 Padding 呼吸感
-	//backBtnCustomLayout := container.NewStack(
-	//	backBtnBg,
-	//	container.NewGridWrap(fyne.NewSize(60, 30), container.NewCenter(backBtnText)),
-	//)
-	//
-	//backBtn := NewClickableBox(backBtnCustomLayout, func() {
-	//	showHome(w, state)
-	//})
-
-	backBtn := getBox("← 返回", 90, 35, &boxColor{textColor: "#000000", bgColor: "#F7F7F7", strokeColor: "#F7F7F7", textSize: 18}, false, func() { showHome(w, state) })
+	backBtn := getBox("← 返回", 90, 35, &boxColor{textColor: "#000000", bgColor: "#F7F7F7", strokeColor: "#F7F7F7", textSize: 18}, true, false, func() { showHome(w, state) })
 
 	// ✨ 核心修复 1：放弃 widget.NewLabel，改用 canvas.NewText
 	// 这样可以手动锁死字体颜色（如深灰色 #333333），确保在 WSL 暗色端和手机端都能清晰可见，不会隐形
@@ -59,9 +33,6 @@ func showTypeSelection(w fyne.Window, state *AppState, practiceMode string) {
 	topBar := container.NewBorder(nil, nil, backBtn, rightBox, widget.NewLabel(""))
 
 	// 2. 当前题库名称显示区
-	//bankNameText := canvas.NewText("📖 "+state.CurrentFileName, hexColor("#333333"))
-	//bankNameText.TextSize = 16
-	//bankNameText.Alignment = fyne.TextAlignCenter
 	bankNameText := widget.NewLabel("📖 " + state.CurrentFileName)
 	bankNameText.Alignment = fyne.TextAlignCenter // 🎯 保证文字在两行时也是居中的
 	bankNameText.Wrapping = fyne.TextWrapBreak    // 允许换行

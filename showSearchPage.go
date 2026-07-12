@@ -54,7 +54,7 @@ func showSearchPage(w fyne.Window, state *AppState, goBack func()) {
 	pageBg := canvas.NewRectangle(hexColor("#f5f5f5"))
 
 	//backBtn := widget.NewButton("← 返回", func() { goBack() })
-	backBtn := getBox("← 返回", 90, 35, &boxColor{textColor: "#000000", bgColor: "#F0F2F5", strokeColor: "#F0F2F5", textSize: 18}, false, func() { goBack() })
+	backBtn := getBox("← 返回", 90, 35, &boxColor{textColor: "#000000", bgColor: "#F0F2F5", strokeColor: "#F0F2F5", textSize: 18}, true, false, func() { goBack() })
 	navBar := container.NewBorder(getTitle(), nil, backBtn, widget.NewLabelWithStyle("搜索本题库", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}))
 
 	keyword := ""

@@ -502,12 +502,6 @@ func showHome(w fyne.Window, state *AppState) {
 	bottomBox := container.NewBorder(header, nil, nil, nil, scrollList)
 
 	// ------------------ 请从 bottomBox 的定义开始向下全量替换 ------------------
-	//bottomBox := container.NewVBox(
-	//	widget.NewSeparator(),
-	//	listTitle,
-	//	layout.NewSpacer(),
-	//	scrollList,
-	//)
 
 	// 1. 创建一个 15 像素高的透明色块，作为底部的安全垫片
 	bottomPadding := canvas.NewRectangle(color.Transparent)
@@ -568,13 +562,7 @@ func showHome(w fyne.Window, state *AppState) {
 			textCenter := widget.NewLabel(" " + textItem.Text + " ")
 			textCenter.Wrapping = fyne.TextWrapBreak // 🔥 允许在屏幕宽度内自动折行
 
-			//paddedItemBox := container.NewBorder(
-			//	nil, nil, nil, nil,
-			//	container.NewPadded(textCenter),
-			//	//textCenter,
-			//)
 			rowStack := container.NewStack(bg, textCenter)
-			//rowStack := container.NewStack(bg, paddedItemBox)
 
 			// ------------------ 请在 refreshHomeUI 的循环内部找到并替换此处的 clickableRow ------------------
 			clickableRow := NewClickableBox(rowStack, func() {

@@ -252,8 +252,6 @@ func loadAndRenderBank(w fyne.Window, state *AppState, targetKey string) {
 		dialog.ShowInformation("[DEBUG ❌]", fmt.Sprintf("读取沙盒题库文件失败: %v\n", err), w)
 		//fmt.Printf("[DEBUG ❌] 读取沙盒题库文件失败: %v\n", err)
 	}
-	// 2. 更新偏好设置
-	//fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", targetKey)
 }
 
 // 提取出来的创建完美 Label 的函数

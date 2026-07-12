@@ -436,10 +436,6 @@ func parseTxtContentDirect(content string, storageKey string) (*BankData, error)
 						currentQuestion.Options["A"] = "（未识别到答案）"
 					}
 				}
-
-				// 调试输出
-				//fmt.Println("currentQuestion.Options[A]: ", currentQuestion.Options["A"])
-				//fmt.Println("currentQuestion.Answer: ", currentQuestion.Answer)
 			}
 		} else if currentType == "单选题" && currentQuestion != nil {
 			// ✨ 修复 1：利用 Index 截取法完美实现多选项解析，彻底绕过正则断言限制

@@ -75,19 +75,6 @@ func savePracticeRecordsToLocal(state *AppState) {
 		return
 	}
 
-	// 定义存储的数据结构，把记录和当前的 ✓、✕ 计数一起打包
-	//type PracticeSaveData struct {
-	//	//CorrectCount int               `json:"correct_count"`
-	//	//WrongCount   int               `json:"wrong_count"`
-	//	Records map[string]string `json:"records"`
-	//}
-	//
-	//data := PracticeSaveData{
-	//	//CorrectCount: state.PracticeCorrectCount,
-	//	//WrongCount:   state.PracticeWrongCount,
-	//	Records: state.PracticeRecords,
-	//}
-
 	fileName := state.CurrentFileName + "_答题记录.json"
 	storageDir := fyne.CurrentApp().Storage().RootURI().Path()
 	absolutePath := filepath.Join(storageDir, fileName)
@@ -99,18 +86,12 @@ func savePracticeRecordsToLocal(state *AppState) {
 		return
 	}
 	os.WriteFile(absolutePath, bytesData, 0644)
-
-	//jsonData, _ := json.Marshal(data)
-	//_ = os.WriteFile(absolutePath, jsonData, 0644)
 }
 
 // 2. ✨ 从本地加载已有的答题记录
 func loadPracticeRecordsFromLocal(state *AppState) {
 	if state.CurrentFileName == "" {
-		//state.PracticeRecords = make(map[string]string)
 		state.ModeRecords = make(map[string]map[string]string)
-		//state.PracticeCorrectCount = 0
-		//state.PracticeWrongCount = 0
 		return
 	}
 
@@ -135,38 +116,10 @@ func loadPracticeRecordsFromLocal(state *AppState) {
 	if state.Title != "" && state.ModeRecords[state.Title] != nil {
 		state.PracticeRecords = state.ModeRecords[state.Title]
 	}
-
-	//bytesData, err := os.ReadFile(absolutePath)
-	//if err != nil {
-	//	// 文件不存在，说明是全新练习，初始化干净的数据
-	//	state.PracticeRecords = make(map[string]string)
-	//	//state.PracticeCorrectCount = 0
-	//	//state.PracticeWrongCount = 0
-	//	return
-	//}
-
-	//type PracticeSaveData struct {
-	//	CorrectCount int               `json:"correct_count"`
-	//	WrongCount   int               `json:"wrong_count"`
-	//	Records      map[string]string `json:"records"`
-	//}
-	//
-	//var data PracticeSaveData
-	//if err := json.Unmarshal(bytesData, &data); err == nil {
-	//	//state.PracticeCorrectCount = data.CorrectCount
-	//	//state.PracticeWrongCount = data.WrongCount
-	//	state.PracticeRecords = data.Records
-	//} else {
-	//	state.PracticeRecords = make(map[string]string)
-	//	//state.PracticeCorrectCount = 0
-	//	//state.PracticeWrongCount = 0
-	//}
 }
 
 // 3. ✨ 【配合任务5】提供给“删除记录”按钮使用的清空函数
 func clearPracticeRecords(state *AppState) {
-	//state.PracticeCorrectCount = 0
-	//state.PracticeWrongCount = 0
 	state.PracticeRecords = make(map[string]string)
 
 	// 从物理磁盘上彻底删除该记录文件
@@ -223,12 +176,7 @@ func handleUserSelectOption(state *AppState, q Question, selectedAnswer string) 
 	}
 
 	// 3. 执行打分状态联动
-	//if isCorrect {
-	//	state.PracticeCorrectCount++
-	//} else {
 	if !isCorrect {
-		//state.PracticeWrongCount++
-
 		// 错题集只增不减：打上钢印并自动同步到沙盒持久化
 		state.WrongSet[q.ID] = true
 		saveSetToLocal(state, "错题集", state.WrongSet)

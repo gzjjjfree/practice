@@ -18,7 +18,7 @@ func getDefaultColor() *boxColor {
 	return &boxColor{textColor: "#333333", bgColor: "#f0f0f0", strokeColor: "#d9d9d9", textSize: 18}
 }
 
-func getBox(btnText string, width float32, hight float32, bxColor *boxColor, isDisabled bool, backfun func()) *ClickableBox {
+func getBox(btnText string, width float32, hight float32, bxColor *boxColor, bold bool, isDisabled bool, backfun func()) *ClickableBox {
 
 	// ✨ 状态拦截：如果处于禁用状态，切换为置灰配色
 	if isDisabled {
@@ -29,7 +29,7 @@ func getBox(btnText string, width float32, hight float32, bxColor *boxColor, isD
 
 	backBtnText := canvas.NewText(btnText, hexColor(bxColor.textColor))
 	backBtnText.TextSize = bxColor.textSize
-	backBtnText.TextStyle = fyne.TextStyle{Bold: true}
+	backBtnText.TextStyle = fyne.TextStyle{Bold: bold}
 	//backBtnText.Alignment = fyne.TextAlignCenter
 
 	backBtnBg := canvas.NewRectangle(hexColor(bxColor.bgColor))
