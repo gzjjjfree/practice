@@ -1,16 +1,16 @@
 module github.com/gzjjjfree/practice
 
-go 1.26.4
-
-require fyne.io/fyne/v2 v2.7.4
+go 1.25.0
 
 require (
-	github.com/extrame/ole2 v0.0.0-20160812065207-d69429661ad7 // indirect
-	github.com/extrame/xls v0.0.1 // indirect
+	fyne.io/fyne/v2 v2.7.4
+	github.com/shakinm/xlsReader v0.9.12
+)
+
+require (
 	github.com/metakeule/fmtdate v1.1.2 // indirect
 	github.com/richardlehane/mscfb v1.0.6 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
-	github.com/shakinm/xlsReader v0.9.12 // indirect
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/xuri/efp v0.0.1 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
@@ -51,6 +51,6 @@ require (
 	golang.org/x/image v0.25.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.38.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
