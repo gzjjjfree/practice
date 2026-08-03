@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go *)",
+      "Bash(mkdir *)",
+      "Bash(git rm *)",
+      "Bash(true)"
+    ]
+  },
+  "$version": 4
+}
