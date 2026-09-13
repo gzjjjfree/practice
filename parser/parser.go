@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"runtime"
 	"strings"
 
-	"github.com/gzjjjfree/practice/core"
 	"github.com/shakinm/xlsReader/xls"
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -142,8 +142,11 @@ func batchStripLeadingNumbers(questions []QuestionItem, threshold int) {
 func ParseBytesToBank(fileBytes []byte, fileName string, storageKey string) (bank *BankData, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("[PANIC] parse error (caught): %v\n", r)
-			err = fmt.Errorf("parse error (caught): %v", r)
+			stackBuf := make([]byte, 4096)
+			n := runtime.Stack(stackBuf, false)
+			stackTrace := string(stackBuf[:n])
+			fmt.Printf("[PANIC] parse error (caught): %v\n%s\n", r, stackTrace)
+			err = fmt.Errorf("parse error (caught): %v\nstack: %s", r, stackTrace)
 		}
 	}()
 
@@ -558,7 +561,9 @@ func GetFileExtension(fileName string) string {
 func ExtractFileName(fullName string) string {
 	reg := regexp.MustCompile(`^(xlsData|xlsxData|txtData|txtsData|jsonData)_`)
 	res := reg.ReplaceAllString(fullName, "")
-	regEnd := regexp.MustCompile(`\.(xls|xlsx|txt|txts|json)(_\d+)?$`)
+	// Strip trailing _<digits> (timestamp) whether or not preceded by a file extension.
+	// Handles both "xxx.xlsx_12345" and "xxx_12345" (no extension).
+	regEnd := regexp.MustCompile(`(?:\.(?:xls|xlsx|txt|txts|json))?(?:_\d+)?$`)
 	return regEnd.ReplaceAllString(res, "")
 }
 
@@ -645,58 +650,4 @@ func ConvertXlsToXlsxBytes(xlsBytes []byte) ([]byte, error) {
 
 	buf, err := xlsxFile.WriteToBuffer()
 	return buf.Bytes(), err
-}
-
-// SyncQuestionsToState converts parsed BankData into the in-memory Question slice inside AppState.
-func SyncQuestionsToState(state *core.AppState, bankData *BankData) {
-	state.Questions = make([]core.Question, len(bankData.Questions))
-	for idx, srcQ := range bankData.Questions {
-		var convertedOpts []core.Option
-		for _, k := range []string{"A", "B", "C", "D", "E", "F", "G", "H", "I"} {
-			if srcQ.Options[k] != "" {
-				convertedOpts = append(convertedOpts, core.Option{Label: k, Text: srcQ.Options[k]})
-			}
-		}
-		var answers []string
-		cleanAns := strings.NewReplacer("、", "", ",", "", " ", "").Replace(srcQ.Answer)
-		for _, char := range cleanAns {
-			answers = append(answers, string(char))
-		}
-		if len(answers) == 0 && srcQ.Answer != "" {
-			answers = append(answers, srcQ.Answer)
-		}
-
-		state.Questions[idx] = core.Question{
-			ID:         fmt.Sprintf("%d", srcQ.ID),
-			Type:       srcQ.Type,
-			Content:    srcQ.Content,
-			Options:    convertedOpts,
-			Answers:    answers,
-			Difficulty: srcQ.Difficulty,
-		}
-	}
-
-	if state.ModeIndices == nil {
-		state.ModeIndices = make(map[string]int)
-	}
-}
-
-// CalculateCurrentModeStats counts correct/wrong answers from PracticeRecords for the current mode.
-func CalculateCurrentModeStats(state *core.AppState) (correctCount int, wrongCount int) {
-	state.PracticeRecordsMu.Lock()
-	defer state.PracticeRecordsMu.Unlock()
-
-	for _, q := range state.CurrentList {
-		historyAns, exists := state.PracticeRecords[q.ID]
-		if !exists || historyAns == "null" || historyAns == "" {
-			continue
-		}
-
-		if core.IsAnswerCorrect(historyAns, q) {
-			correctCount++
-		} else {
-			wrongCount++
-		}
-	}
-	return correctCount, wrongCount
 }

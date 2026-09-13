@@ -8,3 +8,16 @@ bundletool*
 *.apks
 *.jks
 *.sh
+.qwen
+.roo/
+.vscode/
+
+practice_app
+practice
+Debug
+
+FRONTEND_API_GUIDE.md
+BUGFIX_SUMMARY.md
+BACKEND_DESIGN.md
+ARCH_NOTES.md
+AGENTS.md

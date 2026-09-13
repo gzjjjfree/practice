@@ -14,6 +14,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"github.com/gzjjjfree/practice/core"
+	"github.com/gzjjjfree/practice/customElements"
 	"github.com/gzjjjfree/practice/parser"
 )
 
@@ -22,20 +23,27 @@ func ShowExportDialog(w fyne.Window, state *core.AppState) {
 	formatRadio := widget.NewRadioGroup([]string{"Excel (.xlsx)", "JSON (.json)"}, nil)
 	formatRadio.SetSelected("Excel (.xlsx)")
 
+	msgText := customElements.NewCenterRichText("请选择您要导出的文件格式：")
+
 	content := container.NewVBox(
-		widget.NewLabel("请选择您要导出的文件格式："),
+		msgText,
 		formatRadio,
 	)
 
-	dialog.ShowCustomConfirm("导出题库", "下一步", "取消", container.NewPadded(content), func(confirm bool) {
-		if !confirm {
-			return
-		}
+	customElements.ShowCustomConfirm(
+		"导出题库",
+		"下一步",
+		"取消",
+		container.NewPadded(content),
+		func(confirm bool) bool {
+			if !confirm {
+				return true // User cancelled, close the dialog
+			}
 
-		selectedFormat := formatRadio.Selected
-		ExecuteFileSave(w, state, selectedFormat)
-
-	}, w)
+			selectedFormat := formatRadio.Selected
+			ExecuteFileSave(w, state, selectedFormat)
+			return true // Close the dialog after handling the export
+		}, w)
 }
 
 // ExecuteFileSave invokes the system save dialog and triggers export.
@@ -120,7 +128,7 @@ func ExportToJSON(w fyne.Window, state *core.AppState, writer fyne.URIWriteClose
 		return
 	}
 
-	core.ShowCustomInformation("导出成功", "JSON 格式题库已成功导出！", w)
+	customElements.ShowCustomInformation("导出成功", "JSON 格式题库已成功导出！", w)
 }
 
 // ==================== Export to Excel ====================
@@ -215,5 +223,5 @@ func ExportToExcel(w fyne.Window, state *core.AppState, writer fyne.URIWriteClos
 		return
 	}
 
-	core.ShowCustomInformation("导出成功", "Excel 格式题库已成功导出！", w)
+	customElements.ShowCustomInformation("导出成功", "Excel 格式题库已成功导出！", w)
 }
