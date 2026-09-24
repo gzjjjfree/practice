@@ -105,10 +105,12 @@ func LoadAndRenderBank(w fyne.Window, state *core.AppState, targetKey string) {
 			LoadPracticeRecordsFromLocal(state)
 			fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", state.CurrentStorageKey)
 		} else {
-			dialog.ShowInformation("错误", fmt.Sprintf("JSON反序列化失败: %v\n", err), w)
+			// 静默忽略JSON反序列化失败，不弹窗提示用户
+			fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", "")
 		}
 	} else {
-		dialog.ShowInformation("错误", fmt.Sprintf("读取沙盒题库文件失败: %v\n", err), w)
+		// 静默忽略读取沙盒文件失败，不弹窗提示用户
+		fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", "")
 	}
 }
 
@@ -156,21 +158,7 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 
 			// 如果是作为副本新增，生成唯一文件名
 			if isNewAlias {
-				for counter := 1; ; counter++ {
-					testFileName := fmt.Sprintf("%s(%d)%s", baseName, counter, ext)
-					testPattern := "_" + testFileName + "_"
-					exists := false
-					for _, f := range files {
-						if !f.IsDir() && strings.Contains(f.Name(), testPattern) {
-							exists = true
-							break
-						}
-					}
-					if !exists {
-						fileName = testFileName
-						break
-					}
-				}
+				fileName = GenerateUniqueBankFileName(storageDir, originalFileName)
 			} else { // 覆盖原有旧文件
 				for _, oldName := range oldFileNames {
 					_ = os.Remove(filepath.Join(storageDir, oldName))
@@ -229,7 +217,145 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 	fileDialog.Show()
 }
 
-// 辅助函数：显示同名覆盖/新增冲突弹窗
+// ConflictResolutionChoice 表示用户对文件冲突的选择
+type ConflictResolutionChoice int
+
+const (
+	ResolveOverwrite ConflictResolutionChoice = iota // 覆盖原有文件
+	ResolveNewAlias                                  // 作为新文件保存
+)
+
+// FindExistingBankFiles 查找本地存储中与指定文件名冲突的题库文件
+func FindExistingBankFiles(storageDir string, humanName string) []string {
+	files, _ := os.ReadDir(storageDir)
+
+	ext := filepath.Ext(humanName)
+	baseName := strings.TrimSuffix(humanName, ext)
+	searchPatterns := []string{"_" + humanName + "_", "_" + baseName + "_", "_" + humanName}
+
+	var oldFileNames []string
+	for _, f := range files {
+		if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
+			// 排除错题集、收藏集、答题记录等文件
+			if strings.Contains(f.Name(), "错题") || strings.Contains(f.Name(), "收藏") || strings.Contains(f.Name(), "答题记录") {
+				continue
+			}
+
+			for _, p := range searchPatterns {
+				if strings.Contains(f.Name(), p) {
+					// 排除带(n)后缀的文件如：测试题库.xlsx(1)_timestamp.json
+					if !strings.Contains(f.Name(), "_"+baseName+"(") && !strings.Contains(f.Name(), humanName+"(") {
+						oldFileNames = append(oldFileNames, f.Name())
+					}
+					break
+				}
+			}
+		}
+	}
+
+	return oldFileNames
+}
+
+// ShowFileConflictDialog 显示文件冲突对话框
+func ShowFileConflictDialog(w fyne.Window, fileName string, onChoice func(choice ConflictResolutionChoice)) {
+	var confirmDialog dialog.Dialog
+
+	cancelBtn := widget.NewButton(" 取消 ", func() { confirmDialog.Hide() })
+
+	overwriteBtn := widget.NewButton(" 覆盖 ", func() {
+		confirmDialog.Hide()
+		onChoice(ResolveOverwrite)
+	})
+	overwriteBtn.Importance = widget.DangerImportance
+
+	addBtn := widget.NewButton(" 新增 ", func() {
+		confirmDialog.Hide()
+		onChoice(ResolveNewAlias)
+	})
+	addBtn.Importance = widget.HighImportance
+
+	buttons := container.NewHBox(layout.NewSpacer(), cancelBtn, overwriteBtn, addBtn, layout.NewSpacer())
+	msgLbl := widget.NewLabel(fmt.Sprintf("题库列表中已存在名为【%s】的文件。\n\n请选择接下来的操作：", fileName))
+	msgLbl.Alignment = fyne.TextAlignCenter
+	msgLbl.Wrapping = fyne.TextWrapWord
+
+	content := container.NewVBox(
+		msgLbl,
+		container.NewGridWrap(fyne.NewSize(1, 20)),
+		container.NewPadded(container.NewCenter(buttons)),
+	)
+
+	styledContent := container.NewStack(
+		container.NewGridWrap(fyne.NewSize(300, 1)),
+		container.NewPadded(content),
+	)
+
+	confirmDialog = dialog.NewCustomWithoutButtons("文件已存在", styledContent, w)
+	confirmDialog.Show()
+}
+
+// GenerateUniqueBankFileName 根据原有文件名和存储目录，生成不重复的唯一副本文件名（如：测试(1).xlsx）
+func GenerateUniqueBankFileName(storageDir string, originalFileName string) string {
+	files, _ := os.ReadDir(storageDir)
+	ext := filepath.Ext(originalFileName)
+	baseName := strings.TrimSuffix(originalFileName, ext)
+	fileName := originalFileName
+
+	for counter := 1; ; counter++ {
+		testFileName := fmt.Sprintf("%s(%d)%s", baseName, counter, ext)
+		testPattern := "_" + testFileName + "_"
+		exists := false
+		for _, f := range files {
+			if !f.IsDir() && (strings.Contains(f.Name(), testPattern) || strings.Contains(f.Name(), "_"+testFileName)) {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			fileName = testFileName
+			break
+		}
+	}
+	return fileName
+}
+
+// GenerateNewStorageKey 生成新的存储键（处理新增副本的情况）
+func GenerateNewStorageKey(storageDir string, humanName string, fileExtPrefix string) string {
+	ext := filepath.Ext(humanName)
+	baseName := strings.TrimSuffix(humanName, ext)
+
+	for counter := 1; ; counter++ {
+		testFileName := fmt.Sprintf("%s(%d)%s", baseName, counter, ext)
+		testKey := fmt.Sprintf("%sData_%s_%d", fileExtPrefix, testFileName, time.Now().UnixMilli())
+
+		// 检查该存储键是否已存在
+		exists := false
+		files, _ := os.ReadDir(storageDir)
+		for _, f := range files {
+			if !f.IsDir() && f.Name() == testKey+".json" {
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			return testKey
+		}
+	}
+}
+
+// OverwriteExistingBankFiles 覆盖现有的题库文件
+func OverwriteExistingBankFiles(storageDir string, oldFileNames []string) error {
+	for _, oldName := range oldFileNames {
+		lfPath := filepath.Join(storageDir, oldName)
+		if err := os.Remove(lfPath); err != nil {
+			return fmt.Errorf("删除旧文件失败: %v", err)
+		}
+	}
+	return nil
+}
+
+// 辅助函数：显示同名覆盖/新增冲突弹窗（保留向后兼容）
 func showConflictDialog(w fyne.Window, fileName string, onChoice func(isNewAlias bool)) {
 	var confirmDialog dialog.Dialog
 

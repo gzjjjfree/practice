@@ -363,6 +363,21 @@ func (state *AppState) DownloadServerBank(bankID int, callback func(success bool
 	callback(true, "题库下载成功")
 }
 
+// DownloadServerBankForExam downloads a question bank from server for exam creation.
+func (state *AppState) DownloadServerBankForExam(bankID int, callback func(success bool, msg string)) {
+	bankData, err := state.APIClient.DownloadServerBankForExam(bankID)
+	if err != nil {
+		if handleServerErrorCode(err, "下载题库", state.Window) {
+			return
+		}
+		callback(false, "下载题库失败: "+err.Error())
+		return
+	}
+
+	state.CurrentServerBank = bankData
+	callback(true, "题库下载成功")
+}
+
 // ==================== 考试相关方法 ====================
 
 // CreateExamSession creates a new exam session.

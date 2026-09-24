@@ -422,7 +422,7 @@ func buildSourcePage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSta
 		},
 	)
 
-	// 服务器题库按钮（标识符：serverBtn，名称："服务器题库"）：点击后切换到服务器题库来源模式，从服务器加载题库数据。
+	// 服务器题库按钮（标识符：serverBtn，名称："服务器题库"）：点击后弹出服务器题库选择对话框，从服务器加载题库数据。
 	serverBtn = customElements.CreateButton(
 		core.AdminServerBankBtnLabel,
 		core.BtnLargeWidth, core.BtnLargeHeight,
@@ -434,8 +434,125 @@ func buildSourcePage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSta
 		fyne.TextWrapOff,     // 👈 不换行
 		fyne.TextTruncateOff, // 👈 不换行（截断）
 		func() {
-			ws.sourceTab = 1
-			updateSourceSelection(ws, localBtn, serverBtn)
+			// 从服务器获取题库列表
+			state.FetchServerBankList(func(success bool, banks []network.ServerBankItem, msg string) {
+				if !success {
+					customElements.ShowCustomInformation(core.AdminErrorText, msg, w)
+					return
+				}
+
+				if len(banks) == 0 {
+					customElements.ShowCustomInformation(core.AdminInfoText, "暂无服务器题库", w)
+					return
+				}
+
+				selectLabel := widget.NewLabel("请选择服务器题库")
+				selectLabel.Wrapping = fyne.TextWrapWord
+				selectLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+				var checkObjs []fyne.CanvasObject
+				var checkedBankIDs []int
+				for _, bank := range banks {
+					showName := bank.DisplayName
+					cb := widget.NewCheck(showName, func(checked bool) {
+						if checked {
+							checkedBankIDs = append(checkedBankIDs, bank.BankID)
+						} else {
+							for j, id := range checkedBankIDs {
+								if id == bank.BankID {
+									checkedBankIDs = append(checkedBankIDs[:j], checkedBankIDs[j+1:]...)
+									break
+								}
+							}
+						}
+					})
+					checkObjs = append(checkObjs, cb)
+				}
+
+				checkVBox := container.NewVBox(checkObjs...)
+				checkScroll := container.NewVScroll(checkVBox)
+				checkScroll.SetMinSize(fyne.NewSize(core.LocalBankDialogWidth, core.LocalBankDialogHeight))
+
+				var selDialog dialog.Dialog
+				// 确认选择按钮（标识符：confirmBtn，名称："确认"）：确认选中的服务器题库并下载题目数据。
+				confirmBtn := customElements.CreateButton(
+					core.AdminConfirmText,
+					core.DialogActionBtnWidth,
+					core.DialogActionBtnHeight,
+					core.HexColor(core.CardBgColor),
+					core.HexColor(core.BtnPrimaryBg),
+					core.HexColor(core.BtnPrimaryBg),
+					core.AdminButtonStrokeWidth,
+					core.AdminDialogBtnFontSize,
+					true, false,
+					fyne.TextAlignCenter, // 👈 居中对齐
+					fyne.TextWrapOff,     // 👈 不换行
+					fyne.TextTruncateOff, // 👈 不换行（截断）
+					func() {
+						if selDialog != nil {
+							selDialog.Hide()
+						}
+						ws.sourceTab = 1
+						ws.serverBankIDs = checkedBankIDs
+						ws.serverQuestions = nil
+
+						// 下载选中的服务器题库数据
+						downloadCount := 0
+						totalBanks := len(checkedBankIDs)
+
+						for _, bankID := range checkedBankIDs {
+							state.DownloadServerBankForExam(bankID, func(success bool, downloadMsg string) {
+								if success && state.CurrentServerBank != nil {
+									// 将服务器题目数据追加到 ws.serverQuestions
+									for _, sq := range state.CurrentServerBank.Questions {
+										ws.serverQuestions = append(ws.serverQuestions, sq)
+									}
+								} else {
+									customElements.ShowCustomInformation(core.AdminErrorText, "下载题库失败: "+downloadMsg, w)
+								}
+
+								downloadCount++
+								if downloadCount == totalBanks {
+									updateSourceSelection(ws, localBtn, serverBtn)
+								}
+							})
+						}
+					},
+				)
+
+				// 取消按钮（标识符：cancelBtn，名称："取消"）：关闭服务器题库选择对话框，不执行任何加载操作。
+				cancelBtn := customElements.CreateButton(
+					core.AdminCancelText,
+					core.DialogActionBtnWidth,
+					core.DialogActionBtnHeight,
+					core.HexColor(core.TextBodyColor),
+					core.HexColor(core.CardBgColor),
+					core.HexColor(core.BorderLightColor),
+					core.AdminCancelBtnStrokeWidth,
+					core.AdminDialogBtnFontSize,
+					false, false,
+					fyne.TextAlignCenter, // 👈 居中对齐
+					fyne.TextWrapOff,     // 👈 不换行
+					fyne.TextTruncateOff, // 👈 不换行（截断）
+					func() {
+						if selDialog != nil {
+							selDialog.Hide()
+						}
+					},
+				)
+
+				btnRow := container.NewHBox(cancelBtn, layout.NewSpacer(), confirmBtn)
+				selContent := container.NewVBox(
+					selectLabel,
+					container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH10)),
+					container.NewCenter(checkScroll),
+					container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH15)),
+					container.NewCenter(btnRow),
+				)
+
+				selDialog = dialog.NewCustomWithoutButtons("选择服务器题库", selContent, w)
+				selDialog.Show()
+			})
 		},
 	)
 

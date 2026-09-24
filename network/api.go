@@ -198,6 +198,64 @@ func (c *APIClient) DownloadBank(bankID int) (*ServerBankData, error) {
 	return &resp.Data, nil
 }
 
+// DownloadServerBankForExam downloads a complete question bank from server for exam creation.
+// This uses the /banks/{bank_id}/export endpoint which returns ServerBankData format.
+func (c *APIClient) DownloadServerBankForExam(bankID int) (*ServerBankData, error) {
+	fmt.Printf("[API_DOWNLOAD_SERVER_BANK] REQUEST: GET /banks/%d/export\n", bankID)
+
+	type RawResp struct {
+		Code int             `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+	var raw RawResp
+
+	endpoint := fmt.Sprintf("/banks/%d/export", bankID)
+	req, _ := http.NewRequest("GET", BaseURL+endpoint, nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		fmt.Printf("[API_DOWNLOAD_SERVER_BANK] HTTP request error: %v\n", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	fmt.Printf("[API_DOWNLOAD_SERVER_BANK] HTTP status=%d, body=%s\n", resp.StatusCode, string(bodyBytes))
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var apiErr struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		json.Unmarshal(bodyBytes, &apiErr)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiErr.Msg)
+	}
+
+	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
+		fmt.Printf("[API_DOWNLOAD_SERVER_BANK] JSON unmarshal error: %v\n", err)
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if raw.Code != 0 {
+		return nil, fmt.Errorf("download bank failed: %s", raw.Msg)
+	}
+
+	fmt.Printf("[API_DOWNLOAD_SERVER_BANK] raw.Data = %s\n", string(raw.Data))
+
+	// The /export endpoint returns data that is structurally identical to ServerBankData (bank_id/display_name/questions).
+	var sbd ServerBankData
+	if err := json.Unmarshal(raw.Data, &sbd); err != nil {
+		fmt.Printf("[API_DOWNLOAD_SERVER_BANK] ServerBankData unmarshal error: %v\n", err)
+		return nil, fmt.Errorf("failed to parse bank data: %w", err)
+	}
+
+	fmt.Printf("[API_DOWNLOAD_SERVER_BANK] BankID=%d, DisplayName=%q, len(Questions)=%d\n", sbd.BankID, sbd.DisplayName, len(sbd.Questions))
+
+	return &sbd, nil
+}
+
 // CreateExamSession creates a new exam session.
 func (c *APIClient) CreateExamSession(examTemplateID int) (*ExamSessionData, error) {
 	req := ExamCreateReq{

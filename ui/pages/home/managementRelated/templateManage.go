@@ -211,7 +211,7 @@ func buildTemplateCardWithDetail(tmpl *network.TemplateItem, detail *network.Tem
 	infoText.TextSize = core.TemplateInfoTextFontSize
 
 	// Time info
-	timeText := canvas.NewText(fmt.Sprintf(core.TemplateInfoStartTimeLabel+" %s\n"+core.TemplateInfoEndTimeLabel+" %s", tmpl.StartTime, tmpl.EndTime), core.HexColor(core.TextMutedColor))
+	timeText := canvas.NewText(fmt.Sprintf("开始: %s\n结束: %s", tmpl.StartTime, tmpl.EndTime), core.HexColor(core.TextMutedColor))
 	timeText.TextSize = core.TemplateTimeTextFontSize
 
 	// 按钮行

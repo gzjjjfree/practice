@@ -1294,45 +1294,34 @@ func executeDownloadAndSave(w fyne.Window, state *core.AppState, bankID int, dis
 
 		humanName := detail.DisplayName
 		storageDir := storageRelated.GetStorageDir()
-		files, _ := os.ReadDir(storageDir)
 
-		var dupFileNames []string
-		for _, f := range files {
-			if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
-				filePath := fmt.Sprintf("%s/%s", storageDir, f.Name())
-				data, err := os.ReadFile(filePath)
-				if err != nil {
-					continue
-				}
-				var localBank parser.BankData
-				if err := json.Unmarshal(data, &localBank); err == nil && localBank.DisplayName == humanName {
-					dupFileNames = append(dupFileNames, localBank.DisplayName)
-				}
-			}
-		}
+		// 使用公共函数查找冲突文件
+		oldFileNames := storageRelated.FindExistingBankFiles(storageDir, humanName)
 
-		saveBank := func(overwrite bool) {
+		saveBank := func(choice storageRelated.ConflictResolutionChoice) {
 			var newStorageKey string
-			cleanName := strings.ReplaceAll(humanName, " ", "_")
+			fileName := humanName
 
-			if overwrite {
-				newStorageKey = fmt.Sprintf("xlsxData_%s", cleanName)
-				for _, f := range files {
-					if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
-						lfPath := fmt.Sprintf("%s/%s", storageDir, f.Name())
-						lfData, _ := os.ReadFile(lfPath)
-						var lfBank parser.BankData
-						if err := json.Unmarshal(lfData, &lfBank); err == nil && lfBank.DisplayName == humanName {
-							_ = os.Remove(lfPath)
-						}
-					}
-				}
+			if choice == storageRelated.ResolveNewAlias {
+				fileName = storageRelated.GenerateUniqueBankFileName(storageDir, humanName)
 			} else {
-				newStorageKey = fmt.Sprintf("xlsxData_%s_%d", cleanName, time.Now().UnixMilli())
+				// 覆盖原有旧文件
+				err := storageRelated.OverwriteExistingBankFiles(storageDir, oldFileNames)
+				if err != nil {
+					customElements.ShowCustomInformation(core.BankManageErrorMsgType, "保存文件失败: "+err.Error(), w)
+					return
+				}
 			}
+
+			timestamp := time.Now().UnixMilli()
+			fileExt := strings.ToLower(parser.GetFileExtension(fileName))
+			if fileExt == "" {
+				fileExt = "xlsx"
+			}
+			newStorageKey = fmt.Sprintf("%sData_%s_%d", fileExt, fileName, timestamp)
 
 			bankData := parser.BankData{
-				DisplayName: humanName,
+				DisplayName: parser.ExtractFileName(newStorageKey),
 				StorageKey:  newStorageKey,
 				Questions:   detail.Questions,
 			}
@@ -1360,84 +1349,13 @@ func executeDownloadAndSave(w fyne.Window, state *core.AppState, bankID int, dis
 			}
 		}
 
-		if len(dupFileNames) > 0 {
-			var confirmDialog dialog.Dialog
-			// 取消按钮 (core.BankManageCancelBtnText)：关闭本地文件已存在确认对话框，不执行保存操作。
-			cancelBtn := customElements.CreateButton(
-				core.BankManageCancelBtnText,
-				core.ActionBtnWidth,
-				core.DefaultBtnHeight,
-				core.HexColor(core.TextBodyColor),
-				core.HexColor(core.CardBgColor),
-				core.HexColor(core.BorderLightColor),
-				core.StrokeMedium,
-				core.FontSizeButton,
-				true, false,
-				fyne.TextAlignCenter, // 👈 居中对齐
-				fyne.TextWrapOff,     // 👈 不换行
-				fyne.TextTruncateOff, // 👈 不换行（截断）
-				func() {
-					if confirmDialog != nil {
-						confirmDialog.Hide()
-					}
-				})
-			// 覆盖按钮 (core.BankManageOverwriteBtnText)：关闭对话框并覆盖本地已存在的同名题库文件。
-			overwriteBtn := customElements.CreateButton(
-				core.BankManageOverwriteBtnText,
-				core.ActionBtnWidth,
-				core.DefaultBtnHeight,
-				core.HexColor(core.CardBgColor),
-				core.HexColor(core.ColorDeleteBtnBg),
-				core.HexColor(core.ColorDeleteBtnBg),
-				core.StrokeMedium,
-				core.FontSizeButton,
-				true, false,
-				fyne.TextAlignCenter, // 👈 居中对齐
-				fyne.TextWrapOff,     // 👈 不换行
-				fyne.TextTruncateOff, // 👈 不换行（截断）
-				func() {
-					if confirmDialog != nil {
-						confirmDialog.Hide()
-					}
-					saveBank(true)
-				})
-			// 新建按钮 (core.BankManageNewBtnText)：关闭对话框并以带时间戳的新名称保存题库文件，避免覆盖。
-			newBtn := customElements.CreateButton(
-				core.BankManageNewBtnText,
-				core.ActionBtnWidth,
-				core.DefaultBtnHeight,
-				core.HexColor(core.CardBgColor),
-				core.HexColor(core.BtnPrimaryBg),
-				core.HexColor(core.BtnPrimaryBg),
-				core.StrokeMedium,
-				core.FontSizeButton,
-				true, false,
-				fyne.TextAlignCenter, // 👈 居中对齐
-				fyne.TextWrapOff,     // 👈 不换行
-				fyne.TextTruncateOff, // 👈 不换行（截断）
-				func() {
-					if confirmDialog != nil {
-						confirmDialog.Hide()
-					}
-					saveBank(false)
-				})
-
-			btnRow := container.NewHBox(
-				container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH10)), cancelBtn,
-				container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH5)), overwriteBtn,
-				container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH5)), newBtn,
-				container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH10)),
-			)
-
-			msgText := widget.NewRichTextFromMarkdown(fmt.Sprintf(core.BankManageLocalFileExistsMsg, dupFileNames[0]))
-			msgText.Wrapping = fyne.TextWrapWord
-			content := container.NewVBox(msgText, container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH20)), container.NewCenter(btnRow))
-
-			styledContent := container.NewStack(container.NewGridWrap(fyne.NewSize(core.DialogMinWidth, 1)), container.NewPadded(content))
-			confirmDialog = dialog.NewCustomWithoutButtons(core.BankManageFileExistsDialogTitle, styledContent, w)
-			confirmDialog.Show()
+		// 文件重复弹窗确认
+		if len(oldFileNames) > 0 {
+			storageRelated.ShowFileConflictDialog(w, humanName, func(choice storageRelated.ConflictResolutionChoice) {
+				saveBank(choice)
+			})
 		} else {
-			saveBank(false)
+			saveBank(storageRelated.ResolveOverwrite)
 		}
 	})
 }
@@ -1464,9 +1382,13 @@ func downloadMyBank(w fyne.Window, state *core.AppState, bank *network.MyBankIte
 		customElements.NewCenterRichText(fmt.Sprintf(core.BankManageConfirmDownloadConfirmMsg, bank.BankName)),
 		func(confirm bool) bool {
 			if confirm {
-				executeDownloadAndSave(w, state, bank.BankID, bank.BankName, onBack)
+				// ✅ 将下载逻辑放入单独的 goroutine，并延迟执行，防止关闭动画覆盖新弹窗
+				go func() {
+					time.Sleep(200 * time.Millisecond) // 等待第一个确认弹窗彻底关闭
+					executeDownloadAndSave(w, state, bank.BankID, bank.BankName, onBack)
+				}()
 			}
-			return true // 返回 true 表示对话框可以关闭
+			return true // 立即返回 true，让 Fyne 优先关闭当前的确认弹窗
 		},
 		w,
 	)
@@ -1492,7 +1414,6 @@ func downloadBankForOwner(w fyne.Window, state *core.AppState, bank *network.Ban
 		displayName = bank.BankName
 	}
 
-	// 2. 按照新的参数顺序进行调用：标题, 确定按钮文案, 取消按钮文案, 内容对象, 回调函数, 父窗口
 	customElements.ShowCustomConfirm(
 		core.BankManageConfirmDownloadMsg,
 		"确定",
@@ -1500,9 +1421,13 @@ func downloadBankForOwner(w fyne.Window, state *core.AppState, bank *network.Ban
 		customElements.NewCenterRichText(fmt.Sprintf(core.BankManageConfirmDownloadConfirmMsg, displayName)),
 		func(confirm bool) bool {
 			if confirm {
-				executeDownloadAndSave(w, state, bank.BankID, displayName, onBack)
+				// ✅ 同上，使用 goroutine 和延迟解耦弹窗生命周期
+				go func() {
+					time.Sleep(200 * time.Millisecond)
+					executeDownloadAndSave(w, state, bank.BankID, displayName, onBack)
+				}()
 			}
-			return true // 返回 true 表示对话框可以关闭
+			return true
 		},
 		w,
 	)

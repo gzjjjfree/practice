@@ -827,7 +827,7 @@ func showAddQuestionDialog(w fyne.Window, state *core.AppState, onRefresh func()
 			}
 
 			ansEntry := widget.NewMultiLineEntry()
-			if len(qData.answers) > 0 && len(qData.answers) > 0 {
+			if len(qData.answers) > 0 {
 				ansEntry.SetText(strings.Join(qData.answers, "、"))
 			}
 			ansEntry.Wrapping = fyne.TextWrapBreak

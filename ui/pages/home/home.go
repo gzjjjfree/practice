@@ -80,7 +80,7 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 					DeleteBank(w, state)
 					refreshHomeUI()
 				}
-				return false
+				return true
 			}, w)
 	}))
 
@@ -270,7 +270,7 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 								}
 							})
 						}
-						return false
+						return true
 					}, w)
 			},
 		)
