@@ -126,10 +126,10 @@ const (
 	AdminExamCreateTitle = "📋 推送考试"
 	AdminTabSource       = "题库来源"
 	AdminTabExamParams   = "考试设置"
-	AdminTabFilter       = "筛选题目"
 	AdminTabSelect       = "选择题目"
 	AdminTabUser         = "目标用户"
 	AdminTabConfirm      = "确认推送"
+	AdminTabTemplates    = "考试列表"
 
 	AdminSourcePageTitle           = "选择题库来源"
 	AdminSourceHint                = "从本地题库或服务器题库中选题"
@@ -159,6 +159,7 @@ const (
 	AdminNoQuestionsSelectedMsg    = "请先完成选择题目"
 	AdminNoFilteredQuestionsMsg    = "没有符合筛选条件的题目"
 	AdminParamsNotSetMsg           = "请先完成考试设置"
+	AdminSourceNotSetMsg           = "请先完成题库来源设置"
 	AdminTemplateSelectPrompt      = "请选择模板（点击选择后自动填充考试参数）："
 	AdminSuccessSetConfirmed       = "✅ 考试设置已确认成功"
 
@@ -366,6 +367,7 @@ const MyExamsNoDataText = "暂无考试"
 
 // --- 按钮文本 ---
 const MyExamsStartExamBtnText = "开始考试"
+const MyExamsContinueExamBtnText = "继续考试"
 const MyExamsViewDetailsBtnText = "查看详情"
 const MyExamsNotOpenBtnText = "未开放"
 const MyExamsConfirmSubmitTitle = "确认交卷"

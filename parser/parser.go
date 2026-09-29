@@ -616,6 +616,25 @@ func readTxtFileWithEncodingFix(rawBytes []byte) (string, error) {
 	return string(utf8Bytes), nil
 }
 
+// FixEncodingBytes checks if bytes are valid UTF-8. If not, attempts GBK/GB18030 to UTF-8 conversion.
+func FixEncodingBytes(rawBytes []byte) []byte {
+	if IsUTF8(rawBytes) {
+		return rawBytes
+	}
+
+	reader := transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GBK.NewDecoder())
+	utf8Bytes, err := io.ReadAll(reader)
+	if err != nil {
+		reader2 := transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GB18030.NewDecoder())
+		utf8Bytes, err = io.ReadAll(reader2)
+		if err != nil {
+			return rawBytes
+		}
+	}
+
+	return utf8Bytes
+}
+
 // ConvertXlsToXlsxBytes converts legacy .xls bytes to .xlsx bytes.
 func ConvertXlsToXlsxBytes(xlsBytes []byte) ([]byte, error) {
 	file, err := xls.OpenReader(bytes.NewReader(xlsBytes))

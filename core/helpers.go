@@ -26,6 +26,7 @@ type Question struct {
 	Options    []Option
 	Answers    []string // 正确答案的 Label，例如 ["A", "C"]
 	Difficulty string
+	Score      float64
 }
 
 // Option 表示题目的一个选项，包含字母标签和文本内容。

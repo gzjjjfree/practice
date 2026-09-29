@@ -84,11 +84,16 @@ func (c *APIClient) doRequest(method, endpoint string, reqBody, respBody interfa
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+	bodyBytes = parser.FixEncodingBytes(bodyBytes)
+
 	// Accept all 2xx success codes (200 OK, 201 Created, etc.).
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if respBody != nil {
-			decoder := json.NewDecoder(resp.Body)
-			if err := decoder.Decode(respBody); err != nil {
+			if err := json.Unmarshal(bodyBytes, respBody); err != nil {
 				return fmt.Errorf("failed to parse response: %w", err)
 			}
 		}
@@ -96,8 +101,6 @@ func (c *APIClient) doRequest(method, endpoint string, reqBody, respBody interfa
 	}
 
 	// For non-2xx status codes, try to parse JSON response body for {code, msg}.
-	// First, read the body as a string for logging.
-	bodyBytes, _ := io.ReadAll(resp.Body)
 	bodyStr := string(bodyBytes)
 	fmt.Printf("[API_DOREQUEST] non-2xx status=%d, body=%q\n", resp.StatusCode, bodyStr)
 
@@ -349,9 +352,24 @@ func (c *APIClient) CreateExamTemplate(req CreateExamTemplateReq) (*ExamTemplate
 func (c *APIClient) CreateAndPushExam(req CreateAndPushReq) (*CreateAndPushData, error) {
 	var resp CreateAndPushResp
 
+	fmt.Printf("[API_CREATE_AND_PUSH_EXAM] ========== 创建并推送考试 ==========\n")
+	fmt.Printf("[API_CREATE_AND_PUSH_EXAM] REQUEST: POST /templates/create-and-push\n")
+	if reqBytes, err := json.MarshalIndent(req, "", "  "); err == nil {
+		fmt.Printf("[API_CREATE_AND_PUSH_EXAM] Request Body:\n%s\n", string(reqBytes))
+	} else {
+		fmt.Printf("[API_CREATE_AND_PUSH_EXAM] Request Body (raw): %+v\n", req)
+	}
+
 	if err := c.doRequest("POST", "/templates/create-and-push", req, &resp); err != nil {
+		fmt.Printf("[API_CREATE_AND_PUSH_EXAM] doRequest error: %v\n", err)
 		return nil, err
 	}
+
+	fmt.Printf("[API_CREATE_AND_PUSH_EXAM] 服务器响应:\n")
+	fmt.Printf("[API_CREATE_AND_PUSH_EXAM]   Code   = %d\n", resp.Code)
+	fmt.Printf("[API_CREATE_AND_PUSH_EXAM]   Msg    = %q\n", resp.Msg)
+	fmt.Printf("[API_CREATE_AND_PUSH_EXAM]   Data   = %+v\n", resp.Data)
+	fmt.Printf("[API_CREATE_AND_PUSH_EXAM] ========== 创建并推送考试结束 ==========\n")
 
 	if resp.Code != 0 {
 		return nil, fmt.Errorf("create and push exam failed: %s", resp.Msg)
@@ -370,9 +388,23 @@ func (c *APIClient) PushExam(templateID int, targetUserIDs []int) error {
 	}
 	var resp PushExamResp
 
+	fmt.Printf("[API_PUSH_EXAM] ========== 推送考试 ==========\n")
+	fmt.Printf("[API_PUSH_EXAM] REQUEST: POST /templates/push\n")
+	if reqBytes, err := json.MarshalIndent(req, "", "  "); err == nil {
+		fmt.Printf("[API_PUSH_EXAM] Request Body:\n%s\n", string(reqBytes))
+	} else {
+		fmt.Printf("[API_PUSH_EXAM] Request Body (raw): %+v\n", req)
+	}
+
 	if err := c.doRequest("POST", "/templates/push", req, &resp); err != nil {
+		fmt.Printf("[API_PUSH_EXAM] doRequest error: %v\n", err)
 		return err
 	}
+
+	fmt.Printf("[API_PUSH_EXAM] 服务器响应:\n")
+	fmt.Printf("[API_PUSH_EXAM]   Code   = %d\n", resp.Code)
+	fmt.Printf("[API_PUSH_EXAM]   Msg    = %q\n", resp.Msg)
+	fmt.Printf("[API_PUSH_EXAM] ========== 推送考试结束 ==========\n")
 
 	if resp.Code != 0 {
 		return fmt.Errorf("push exam failed: %s", resp.Msg)
@@ -387,9 +419,24 @@ func (c *APIClient) PushExam(templateID int, targetUserIDs []int) error {
 func (c *APIClient) GetMyExams() ([]MyExamItem, error) {
 	var resp MyExamResp
 
-	if err := c.doRequest("GET", "/my-exams?limit=50&offset=0", nil, &resp); err != nil {
+	fmt.Printf("[API_GET_MY_EXAMS] ========== 获取我的考试列表 ==========\n")
+	endpoint := "/my-exams?limit=50&offset=0"
+	fmt.Printf("[API_GET_MY_EXAMS] REQUEST: GET %s\n", BaseURL+endpoint)
+
+	if err := c.doRequest("GET", endpoint, nil, &resp); err != nil {
+		fmt.Printf("[API_GET_MY_EXAMS] doRequest error: %v\n", err)
 		return nil, err
 	}
+
+	fmt.Printf("[API_GET_MY_EXAMS] 服务器响应:\n")
+	fmt.Printf("[API_GET_MY_EXAMS]   Code   = %d\n", resp.Code)
+	fmt.Printf("[API_GET_MY_EXAMS]   Msg    = %q\n", resp.Msg)
+	if dataBytes, err := json.MarshalIndent(resp.Data, "", "  "); err == nil {
+		fmt.Printf("[API_GET_MY_EXAMS]   Data   = %s\n", string(dataBytes))
+	} else {
+		fmt.Printf("[API_GET_MY_EXAMS]   Data   = %+v\n", resp.Data)
+	}
+	fmt.Printf("[API_GET_MY_EXAMS] ========== 获取我的考试列表结束 ==========\n")
 
 	if resp.Code != 0 {
 		return nil, fmt.Errorf("fetch my exams failed: %s", resp.Msg)
@@ -405,9 +452,24 @@ func (c *APIClient) StartMyExam(examID int) (*ExamSessionData, error) {
 	}
 	var resp StartExamResp
 
+	fmt.Printf("[API_START_MY_EXAM] ========== 开始考试 ==========\n")
+	fmt.Printf("[API_START_MY_EXAM] REQUEST: POST /my-exams/start\n")
+	if reqBytes, err := json.MarshalIndent(req, "", "  "); err == nil {
+		fmt.Printf("[API_START_MY_EXAM] Request Body:\n%s\n", string(reqBytes))
+	} else {
+		fmt.Printf("[API_START_MY_EXAM] Request Body (raw): %+v\n", req)
+	}
+
 	if err := c.doRequest("POST", "/my-exams/start", req, &resp); err != nil {
+		fmt.Printf("[API_START_MY_EXAM] doRequest error: %v\n", err)
 		return nil, err
 	}
+
+	fmt.Printf("[API_START_MY_EXAM] 服务器响应:\n")
+	fmt.Printf("[API_START_MY_EXAM]   Code   = %d\n", resp.Code)
+	fmt.Printf("[API_START_MY_EXAM]   Msg    = %q\n", resp.Msg)
+	fmt.Printf("[API_START_MY_EXAM]   Data   = %+v\n", resp.Data)
+	fmt.Printf("[API_START_MY_EXAM] ========== 开始考试结束 ==========\n")
 
 	if resp.Code != 0 {
 		return nil, fmt.Errorf("start exam failed: %s", resp.Msg)
@@ -775,18 +837,37 @@ func (c *APIClient) FetchTemplates(limit, offset int) ([]TemplateItem, int, erro
 		offset = 0
 	}
 
+	fmt.Printf("[API_FETCH_TEMPLATES] ========== 获取考试模板列表 ==========\n")
+	fmt.Printf("[API_FETCH_TEMPLATES] REQUEST: GET /templates?limit=%d&offset=%d\n", limit, offset)
+
 	endpoint := fmt.Sprintf("/templates?limit=%d&offset=%d", limit, offset)
 	if err := c.doRequest("GET", endpoint, nil, &resp); err != nil {
+		fmt.Printf("[API_FETCH_TEMPLATES] doRequest error: %v\n", err)
 		return nil, 0, err
 	}
 
+	fmt.Printf("[API_FETCH_TEMPLATES] 服务器响应:\n")
+	fmt.Printf("[API_FETCH_TEMPLATES]   Code   = %d\n", resp.Code)
+	fmt.Printf("[API_FETCH_TEMPLATES]   Msg    = %q\n", resp.Msg)
+	fmt.Printf("[API_FETCH_TEMPLATES]   Total  = %d\n", resp.Total)
+	fmt.Printf("[API_FETCH_TEMPLATES]   Limit  = %d\n", resp.Limit)
+	fmt.Printf("[API_FETCH_TEMPLATES]   Offset = %d\n", resp.Offset)
+
 	if resp.Code != 0 {
+		fmt.Printf("[API_FETCH_TEMPLATES] ========== 获取考试模板列表失败 ==========\n")
 		return nil, 0, fmt.Errorf("fetch templates failed: %s", resp.Msg)
 	}
 
 	dataBytes, _ := json.Marshal(resp.Data)
 	var templates []TemplateItem
 	json.Unmarshal(dataBytes, &templates)
+
+	fmt.Printf("[API_FETCH_TEMPLATES] 模板数量: %d\n", len(templates))
+	for i, tmpl := range templates {
+		fmt.Printf("[API_FETCH_TEMPLATES]   [%d] ID=%d, 名称=%s, 状态=%s, 题目数=%d, 时长=%d分钟\n",
+			i+1, tmpl.TemplateID, tmpl.ExamName, tmpl.Status, tmpl.QuestionCount, tmpl.DurationMin)
+	}
+	fmt.Printf("[API_FETCH_TEMPLATES] ========== 获取考试模板列表结束 ==========\n")
 
 	return templates, resp.Total, nil
 }

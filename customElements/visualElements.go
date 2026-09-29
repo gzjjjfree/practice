@@ -226,7 +226,7 @@ func (t *TouchInterceptor) Dragged(e *fyne.DragEvent) {
 		t.accumX += e.Dragged.DX
 	} else {
 		t.accumX = 0
-		if t.ParentScroll != nil {
+		if t.ParentScroll != nil && t.ParentScroll.Content != nil {
 			t.ParentScroll.Scrolled(&fyne.ScrollEvent{
 				Scrolled: e.Dragged,
 			})

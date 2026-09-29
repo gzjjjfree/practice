@@ -68,12 +68,13 @@ type ServerBankData struct {
 
 // ServerQuestion 来自服务器的题目。
 type ServerQuestion struct {
-	ID         int               `json:"id"`         // 题目 ID
+	ID         interface{}       `json:"id"`         // 题目 ID (can be int or string)
 	Type       string            `json:"type"`       // 题型
 	Content    string            `json:"content"`    // 题干内容
 	Options    map[string]string `json:"options"`    // 选项（A→文本）
 	Answer     string            `json:"answer"`     // 答案
 	Difficulty string            `json:"difficulty"` // 难度
+	Score      float64           `json:"score"`      // 分值
 }
 
 // ==================== 考试相关 ====================
@@ -163,13 +164,14 @@ type UserListResp struct {
 
 // CreateExamTemplateReq is the request body for creating an exam template.
 type CreateExamTemplateReq struct {
-	LocalBankKey string   `json:"local_bank_key,omitempty"` // local题库 storage key (one of)
-	ServerBankID int      `json:"server_bank_id,omitempty"` // server bank ID (one of)
-	QuestionIDs  []string `json:"question_ids"`             // selected question IDs
-	ExamName     string   `json:"exam_name"`                // exam name
-	DurationMin  int      `json:"duration_min"`             // duration in minutes
-	StartTime    string   `json:"start_time"`               // ISO 8601
-	EndTime      string   `json:"end_time"`                 // ISO 8601
+	LocalBankKey string           `json:"local_bank_key,omitempty"` // local题库 storage key (one of)
+	ServerBankID int              `json:"server_bank_id,omitempty"` // server bank ID (one of)
+	QuestionIDs  []string         `json:"question_ids,omitempty"`   // selected question IDs (optional)
+	Questions    []ServerQuestion `json:"questions"`                // complete questions
+	ExamName     string           `json:"exam_name"`                // exam name
+	DurationMin  int              `json:"duration_min"`             // duration in minutes
+	StartTime    string           `json:"start_time"`               // ISO 8601
+	EndTime      string           `json:"end_time"`                 // ISO 8601
 }
 
 // CreateExamTemplateResp is the response from exam template create API.
@@ -183,16 +185,17 @@ type CreateExamTemplateResp struct {
 // This merges the two-step create+push into a single API call.
 type CreateAndPushReq struct {
 	// Template parameters
-	LocalBankKey string         `json:"local_bank_key,omitempty"` // local题库 storage key
-	ServerBankID int            `json:"server_bank_id,omitempty"` // server bank ID
-	QuestionIDs  []string       `json:"question_ids,omitempty"`   // manually selected question IDs
-	TypeCounts   map[string]int `json:"type_counts,omitempty"`    // per-type question counts: {"单选题": 10, "多选题": 5, ...}
-	ExamName     string         `json:"exam_name"`                // exam name
-	DurationMin  int            `json:"duration_min"`             // duration in minutes
-	StartTime    string         `json:"start_time"`               // ISO 8601
-	EndTime      string         `json:"end_time"`                 // ISO 8601
+	LocalBankKey  string           `json:"local_bank_key,omitempty"` // local题库 storage key
+	ServerBankID  int              `json:"server_bank_id,omitempty"` // server bank ID
+	QuestionIDs   []string         `json:"question_ids,omitempty"`   // manually selected question IDs
+	TypeCounts    map[string]int   `json:"type_counts,omitempty"`    // per-type question counts: {"单选题": 10, "多选题": 5, ...}
+	Questions     []ServerQuestion `json:"questions"`                // complete questions
+	ExamName      string           `json:"exam_name"`                // exam name
+	DurationMin   int              `json:"duration_min"`             // duration in minutes
+	StartTime     string           `json:"start_time"`               // ISO 8601
+	EndTime       string           `json:"end_time"`                 // ISO 8601
 	// Push targets
-	TargetUserIDs []int `json:"target_user_ids"` // target user IDs to push to
+	TargetUserIDs []int            `json:"target_user_ids"`          // target user IDs to push to
 }
 
 // CreateAndPushResp is the response from create-and-push API.
@@ -245,7 +248,7 @@ type MyExamItem struct {
 	DurationMin   int      `json:"duration_min"`
 	StartTime     string   `json:"start_time"`
 	EndTime       string   `json:"end_time"`
-	Status        string   `json:"status"`          // "upcoming" / "active" / "completed" / "expired"
+	Status        string   `json:"status"`          // "upcoming" / "active" / "in_progress" / "timeout" / "completed"
 	Score         *float64 `json:"score,omitempty"` // nil = not taken
 }
 

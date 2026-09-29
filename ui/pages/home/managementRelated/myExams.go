@@ -77,10 +77,17 @@ func ShowMyExams(w fyne.Window, state *core.AppState, backToHome func()) {
 			noDataText.TextSize = core.FontSizeSmall
 			noDataText.Alignment = fyne.TextAlignCenter
 			examListVBox.Add(container.NewPadded(noDataText))
+		} else {
 			for _, exam := range exams {
 				examItem := exam
 				examCard := buildMyExamCard(w, &examItem, state, func() {
 					// Start this exam
+					startExamInSession(w, state, &examItem, func() {
+						// Refresh the list after returning from exam
+						ShowMyExams(w, state, backToHome)
+					})
+				}, func() {
+					// Continue this exam
 					startExamInSession(w, state, &examItem, func() {
 						// Refresh the list after returning from exam
 						ShowMyExams(w, state, backToHome)
@@ -103,23 +110,24 @@ func ShowMyExams(w fyne.Window, state *core.AppState, backToHome func()) {
 // buildMyExamCard 为每个考试项创建卡片 UI。
 //
 // 功能说明：
-// 根据考试状态（未开始/进行中/已完成/已结束）显示不同的颜色标识，并生成包含考试信息、得分和交互按钮的卡片组件。
+// 根据考试状态（未开始/进行中/考试中/考试超时/已结束）显示不同的颜色标识，并生成包含考试信息、得分和交互按钮的卡片组件。
 //
 // 参数说明：
 //   - w: fyne.Window 类型，表示当前应用程序窗口对象。
 //   - exam: *network.MyExamItem 类型，表示考试项的数据结构，包含考试名称、题目数、时长、状态、得分等信息。
 //   - state: *core.AppState 类型，表示全局应用状态对象。
 //   - onStart: func() 类型，开始考试的回调函数（当考试状态为"进行中"且未提交时触发）。
+//   - onContinue: func() 类型，继续考试的回调函数（当考试状态为"考试中"时触发）。
 //
 // 返回值说明：
 //   - fyne.CanvasObject 类型，返回构建好的考试卡片 UI 组件。
 //
 // 核心业务逻辑：
-// 1. 根据考试状态（upcoming/active/completed/expired）映射对应的中文状态文本和颜色标识。
+// 1. 根据考试状态（upcoming/active/in_progress/timeout/completed）映射对应的中文状态文本和颜色标识。
 // 2. 构建考试名称、信息行（题目数、时长、开始/结束时间）、得分显示和状态徽章。
-// 3. 根据考试状态和是否已提交得分，动态生成不同的按钮组合（开始考试、查看详情、未开放）。
+// 3. 根据考试状态和是否已提交得分，动态生成不同的按钮组合（开始考试、继续考试、查看详情、未开放）。
 // 4. 返回一个包含所有元素的卡片 UI 组件。
-func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppState, onStart func()) fyne.CanvasObject {
+func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppState, onStart func(), onContinue func()) fyne.CanvasObject {
 	// 状态徽章颜色映射
 	statusColor := core.TextMutedColor
 	statusText := exam.Status
@@ -130,11 +138,14 @@ func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppSta
 	case "active":
 		statusColor = core.BtnPrimaryBg
 		statusText = "进行中"
+	case "in_progress":
+		statusColor = core.ColorWarningBg
+		statusText = "考试中"
+	case "timeout":
+		statusColor = core.ColorWrongBorder
+		statusText = "考试超时"
 	case "completed":
 		statusColor = core.ColorCorrectBorder
-		statusText = "已完成"
-	case "expired":
-		statusColor = core.ColorWrongBorder
 		statusText = "已结束"
 	}
 
@@ -211,8 +222,66 @@ func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppSta
 		)
 
 		buttonsRow = container.NewHBox(startBtn, viewDetailsBtn)
+	} else if exam.Status == "in_progress" && exam.Score == nil {
+		// 考试中且未提交：显示"继续考试"和"查看详情"按钮
+		// continueBtn: 继续考试按钮，标识符为 core.MyExamsContinueExamBtnText。
+		// 功能与业务用途：点击该按钮可继续当前考试，进入全屏答题会话（通过调用 onContinue 回调函数实现）。
+		continueBtn := customElements.CreateButton(
+			core.MyExamsContinueExamBtnText,
+			core.ActionBtnWidth, core.ActionBtnHeight,
+			core.HexColor(core.CardBgColor),
+			core.HexColor(core.ColorWarningBg),
+			core.HexColor(core.ColorWarningBorder),
+			1.5, 18,
+			true, false,
+			fyne.TextAlignCenter, // 👈 居中对齐
+			fyne.TextWrapOff,     // 👈 不换行
+			fyne.TextTruncateOff, // 👈 不换行（截断）
+			onContinue,
+		)
+
+		// viewDetailsBtn: 查看详情按钮，标识符为 core.MyExamsViewDetailsBtnText。
+		// 功能与业务用途：点击该按钮可弹出考试详情对话框，显示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
+		viewDetailsBtn := customElements.CreateButton(
+			core.MyExamsViewDetailsBtnText,
+			core.ActionBtnWidth, core.ActionBtnHeight,
+			core.HexColor(core.CardBgColor),
+			core.HexColor(core.BtnSecondaryBg),
+			core.HexColor(core.BtnSecondaryBg),
+			1.5, 18,
+			true, false,
+			fyne.TextAlignCenter, // 👈 居中对齐
+			fyne.TextWrapOff,     // 👈 不换行
+			fyne.TextTruncateOff, // 👈 不换行（截断）
+			func() {
+				showExamDetailDialog(w, state, exam)
+			},
+		)
+
+		buttonsRow = container.NewHBox(continueBtn, viewDetailsBtn)
 	} else if exam.Status == "active" && exam.Score != nil {
 		// 进行中的考试但已提交：只显示"查看详情"
+		// viewDetailsBtn: 查看详情按钮，标识符为 core.MyExamsViewDetailsBtnText。
+		// 功能与业务用途：点击该按钮可弹出考试详情对话框，显示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
+		viewDetailsBtn := customElements.CreateButton(
+			core.MyExamsViewDetailsBtnText,
+			core.ActionBtnWidth, core.ActionBtnHeight,
+			core.HexColor(core.CardBgColor),
+			core.HexColor(core.BtnSecondaryBg),
+			core.HexColor(core.BtnSecondaryBg),
+			1.5, 18,
+			true, false,
+			fyne.TextAlignCenter, // 👈 居中对齐
+			fyne.TextWrapOff,     // 👈 不换行
+			fyne.TextTruncateOff, // 👈 不换行（截断）
+			func() {
+				showExamDetailDialog(w, state, exam)
+			},
+		)
+
+		buttonsRow = container.NewCenter(viewDetailsBtn)
+	} else if exam.Status == "in_progress" && exam.Score != nil {
+		// 考试中但已提交：只显示"查看详情"
 		// viewDetailsBtn: 查看详情按钮，标识符为 core.MyExamsViewDetailsBtnText。
 		// 功能与业务用途：点击该按钮可弹出考试详情对话框，显示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
 		viewDetailsBtn := customElements.CreateButton(
@@ -273,7 +342,12 @@ func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppSta
 			))
 	}
 
-	_ = container.NewVBox(
+	cardBg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
+	cardBg.CornerRadius = core.CardCornerRadius
+	cardBg.StrokeColor = core.HexColor(core.BorderLightColor)
+	cardBg.StrokeWidth = core.StrokeThin
+
+	cardContent := container.NewVBox(
 		container.NewBorder(nameText, nil, statusBadge, nil, nil),
 		container.NewGridWrap(fyne.NewSize(1, 8)),
 		infoText,
@@ -283,18 +357,9 @@ func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppSta
 		buttonsRow,
 	)
 
-	return customElements.CreateButton(
-		"", 0, 0,
-		core.HexColor(core.TextBodyColor),
-		core.HexColor(core.CardBgColor),
-		core.HexColor(core.BorderLightColor),
-		core.StrokeMedium,
-		core.FontSizeSubtitle,
-		false, false,
-		fyne.TextAlignCenter, // 👈 居中对齐
-		fyne.TextWrapOff,     // 👈 不换行
-		fyne.TextTruncateOff, // 👈 不换行（截断）
-		nil,
+	return container.NewStack(
+		cardBg,
+		container.NewPadded(cardContent),
 	)
 }
 
@@ -337,13 +402,19 @@ func startExamInSession(w fyne.Window, state *core.AppState, exam *network.MyExa
 				answers = append(answers, q.Answer)
 			}
 
+			score := q.Score
+			if score <= 0 {
+				score = 1.0
+			}
+
 			localQuestions[i] = core.Question{
-				ID:         fmt.Sprintf("%d", q.ID),
+				ID:         fmt.Sprintf("%v", q.ID),
 				Type:       q.Type,
 				Content:    q.Content,
 				Options:    convertedOpts,
 				Answers:    answers,
 				Difficulty: q.Difficulty,
+				Score:      score,
 			}
 		}
 
@@ -391,10 +462,27 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 		}
 		q := state.CurrentList[state.Index]
 
+		// 返回按钮
+		backBtn := customElements.CreateButton(
+			core.AdminBackBtnText,
+			core.BackBtnWidth, core.BackBtnHeight,
+			core.HexColor(core.TextPrimaryColor),
+			core.HexColor(core.CardBgColor),
+			core.HexColor(core.BorderLightColor),
+			core.StrokeMedium, core.FontSizeBody,
+			true, false,
+			fyne.TextAlignCenter, // 👈 居中对齐
+			fyne.TextWrapOff,     // 👈 不换行
+			fyne.TextTruncateOff, // 👈 不换行（截断）
+			func() {
+				onBack()
+			},
+		)
+
 		// 交卷按钮（红色）
 		// submitBtn: 交卷按钮，标识符为 core.MyExamsSubmitBtnText。
 		// 功能与业务用途：点击该按钮可弹出确认提交对话框，确认后调用 state.SubmitMyExamSubmission 提交考试答案，显示得分结果并返回考试列表页面（通过调用 onBack 回调函数实现）。
-		backBtn := customElements.CreateButton(
+		submitBtn := customElements.CreateButton(
 			core.MyExamsSubmitBtnText, core.NavButtonWidth, core.NavButtonHeight,
 			core.HexColor(core.CardBgColor),
 			core.HexColor(core.ColorErrorBg),
@@ -435,11 +523,15 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 		titleLbl.TextSize = core.ExamTitleLabelFontSize
 		titleCenter := container.NewCenter(titleLbl)
 
-		metaLeftStr := fmt.Sprintf("第 %d/%d 题  %s", state.Index+1, len(state.CurrentList), q.Type)
+		score := q.Score
+		if score <= 0 {
+			score = 1.0
+		}
+		metaLeftStr := fmt.Sprintf("第 %d/%d 题  %s（每题 %g 分）", state.Index+1, len(state.CurrentList), q.Type, score)
 		metaLeft := canvas.NewText(metaLeftStr, core.HexColor(core.TextMutedColor))
 		metaLeft.TextSize = 13
 
-		topNav := container.NewBorder(nil, nil, backBtn, nil, titleCenter)
+		topNav := container.NewBorder(nil, nil, backBtn, submitBtn, titleCenter)
 		metaRow := container.NewBorder(nil, nil, metaLeft, nil, nil)
 
 		resetQuestionState := func() {
@@ -678,7 +770,10 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 				}
 			})
 
-		navGrid := container.NewGridWithColumns(3, prevBtn, nil, nextBtn)
+		btnSpacing := canvas.NewRectangle(color.Transparent)
+		btnSpacing.SetMinSize(fyne.NewSize(20, 1))
+		buttonsRow := container.NewHBox(prevBtn, btnSpacing, nextBtn)
+		navGrid := container.NewCenter(buttonsRow)
 
 		questionContent := container.NewVBox(topNav, metaRow, widget.NewSeparator(), stemLbl, optionsBox, layout.NewSpacer(), navGrid)
 
@@ -690,7 +785,7 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 
 		touchArea := customElements.NewTouchInterceptor(
 			container.NewStack(pageBgForExam(), cardStack),
-			container.NewVScroll(nil),
+			nil,
 			func() {
 				if state.Index > 0 {
 					state.Index--
@@ -717,7 +812,7 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 //
 // 功能说明：
 // 从服务器获取考试详情和得分信息，并在对话框中展示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
-// 如果考试状态为"进行中"，则显示"暂停考试"按钮。
+// 如果考试状态为"进行中"或"考试中"，则显示"暂停考试"按钮。
 //
 // 参数说明：
 //   - w: fyne.Window 类型，表示当前应用程序窗口对象。
@@ -741,11 +836,11 @@ func showExamDetailDialog(w fyne.Window, state *core.AppState, exam *network.MyE
 		detailText += fmt.Sprintf("\n用户得分: %.1f\n", result.Score)
 		detailText += fmt.Sprintf("正确题数: %d / %d\n", result.CorrectCount, result.TotalCount)
 
-		// Show pause/resume buttons if status is active
+		// Show pause/resume buttons if status is active or in_progress
 		var buttons []fyne.CanvasObject
-		if exam.Status == "active" {
+		if exam.Status == "active" || exam.Status == "in_progress" {
 			// pauseBtn: 暂停考试按钮，标识符为 core.MyExamsPauseExamBtnText。
-			// 功能与业务用途：当考试状态为"进行中"时显示，点击该按钮可调用 state.PauseExam 暂停当前考试会话，并在成功后刷新详情对话框。
+			// 功能与业务用途：当考试状态为"进行中"或"考试中"时显示，点击该按钮可调用 state.PauseExam 暂停当前考试会话，并在成功后刷新详情对话框。
 			pauseBtn := customElements.CreateButton(
 				core.MyExamsPauseExamBtnText, core.ActionBtnWidth, core.NavButtonHeight,
 				core.HexColor(core.CardBgColor),

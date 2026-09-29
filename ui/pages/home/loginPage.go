@@ -64,14 +64,33 @@ func ShowLoginPage(w fyne.Window, state *core.AppState, backToHome func()) {
 		passwordInput,
 	)
 
+	// 登录按钮
+	var loginBtn *customElements.CustomButton
+
 	// Unified login action to satisfy DRY principle
 	onLoginSubmit := func() {
+		// 禁用登录按钮，防止因网络延迟导致的连续点击
+		if loginBtn != nil {
+			loginBtn.Disable()
+		}
+
 		handleLogin(
 			state,
 			usernameInput,
 			passwordInput,
-			func() {},
-			func(msg string) { customElements.ShowCustomInformation("登录失败", msg, w) },
+			func() {
+				// 登录成功，启用按钮（虽然会跳转，但为了完整性）
+				if loginBtn != nil {
+					loginBtn.Enable()
+				}
+			},
+			func(msg string) {
+				// 登录失败，启用按钮
+				if loginBtn != nil {
+					loginBtn.Enable()
+				}
+				customElements.ShowCustomInformation("登录失败", msg, w)
+			},
 			backToHome,
 			w,
 		)
@@ -87,8 +106,7 @@ func ShowLoginPage(w fyne.Window, state *core.AppState, backToHome func()) {
 		onLoginSubmit()
 	}
 
-	// 登录按钮
-	loginBtn := customElements.CreateButton(
+	loginBtn = customElements.CreateButton(
 		"登    录",
 		core.DefaultBtnWidth,
 		core.DefaultBtnHeight,

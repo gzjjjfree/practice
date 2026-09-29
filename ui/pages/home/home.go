@@ -149,12 +149,6 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 
 	// New feature entry buttons — only visible for admin and above
 	if state.IsAdmin {
-		grid.Add(makeCustomGridBtn("📋", "模板管理", func() {
-			managementRelated.ShowTemplateManage(w, state, func() {
-				ShowHome(w, state)
-			})
-		}))
-
 		grid.Add(makeCustomGridBtn("👥", "用户管理", func() {
 			managementRelated.ShowUserManage(w, state, func() {
 				ShowHome(w, state)

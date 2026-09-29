@@ -3,6 +3,7 @@ package managementRelated
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"sort"
 	"strconv"
@@ -72,7 +73,7 @@ func checkIfQuestionsSelectedFull(ws *AdminExamCreateState) bool {
 
 // ==================== 管理员推送考试页面 ====================
 
-// AdminExamCreateState 跟踪多步向导的状态，包含题库来源、筛选条件、已选题目、考试参数、目标用户、模板相关及UI引用等信息。
+// AdminExamCreateState 跟踪多步向导的状态，包含题库来源、已选题目、考试参数、目标用户、模板相关及UI引用等信息。
 //
 // 字段说明：
 //   - sourceTab: 题库来源标签页索引（0 = 本地题库, 1 = 服务器题库）
@@ -80,8 +81,6 @@ func checkIfQuestionsSelectedFull(ws *AdminExamCreateState) bool {
 //   - localQuestions: 本地题库题目列表
 //   - serverBankIDs: 选中的服务器题库 BankID 列表
 //   - serverQuestions: 服务器题库题目列表
-//   - filterTypes: 题型筛选条件映射（key为题型名称，value为是否选中）
-//   - filterDiff: 难度筛选条件
 //   - selectedQIDs: 已选题目 ID 集合
 //   - examName: 考试名称
 //   - durationMin: 考试时长（分钟）
@@ -106,6 +105,7 @@ func checkIfQuestionsSelectedFull(ws *AdminExamCreateState) bool {
 //   - examParamsContent: 考试设置页面内容容器
 //   - examParamsSummary: 考试设置统计信息容器
 //   - wizard: 向导 TabContainer 引用
+//   - templateRefreshFunc: 模板列表刷新函数
 type AdminExamCreateState struct {
 	sourceTab int // 0 = 本地题库, 1 = 服务器题库
 	// 本地题库来源
@@ -114,16 +114,15 @@ type AdminExamCreateState struct {
 	// 服务器题库来源
 	serverBankIDs   []int // 选中的服务器题库 BankID 列表
 	serverQuestions []network.ServerQuestion
-	// 筛选条件
-	filterTypes map[string]bool // 题型筛选
-	filterDiff  string          // 难度筛选
 	// 已选题目
 	selectedQIDs map[string]bool // 已选题目 ID 集合
 	// 考试参数
-	examName    string    // 考试名称
-	durationMin int       // 考试时长（分钟）
-	startTime   time.Time // 开始时间
-	endTime     time.Time // 结束时间
+	examName     string    // 考试名称
+	durationMin  int       // 考试时长（分钟）
+	startTime    time.Time // 开始时间
+	endTime      time.Time // 结束时间
+	startTimeStr string    // 开始时间字符串
+	endTimeStr   string    // 结束时间字符串
 	// 目标用户
 	selectedUsers map[int]bool // 已选用户 ID 集合
 	// 模板相关
@@ -131,6 +130,10 @@ type AdminExamCreateState struct {
 	templateDetail     *network.TemplateDetailItem // 模板详情（含每种题型的数量）
 	// 每种题型的自定义数量（从模板加载后可修改）
 	typeCounts map[string]int // 每种题型的数量，key 为题型名称
+	// 每种题型的分值
+	typeScores map[string]float64 // 每种题型的分值，key 为题型名称
+	// 题目类型过滤勾选状态（key为题型名称，true表示勾选显示）
+	questionFilterTypes map[string]bool
 	// 考试设置确认状态
 	examParamsConfirmed bool // 考试设置是否已确认
 	// UI 引用（用于动态更新）
@@ -142,12 +145,14 @@ type AdminExamCreateState struct {
 	startTimeLbl      *widget.Label                // 开始时间显示标签
 	endTimeLbl        *widget.Label                // 结束时间显示标签
 	typeEntries       map[string]*widget.Entry     // 每种题型数量输入框
+	typeScoreEntries  map[string]*widget.Entry     // 每种题型分值输入框
 	userVBox          *fyne.Container              // 用户列表容器
 	userScroll        *container.Scroll            // 用户列表滚动容器
 	createBtn         *customElements.CustomButton // 创建推送按钮
 	examParamsContent *fyne.Container              // 考试设置页面内容容器
 	examParamsSummary *fyne.Container              // 考试设置统计信息容器
 	wizard            *container.AppTabs           // 向导 TabContainer 引用
+	templateRefreshFunc func() // 模板列表刷新函数
 }
 
 // ShowAdminExamCreate 打开管理员考试创建向导。
@@ -161,48 +166,59 @@ type AdminExamCreateState struct {
 //   - backToHome: func()，返回主页的回调函数，点击返回按钮时触发。
 func ShowAdminExamCreate(w fyne.Window, state *core.AppState, backToHome func()) {
 	ws := &AdminExamCreateState{
-		sourceTab: 0,
-		filterTypes: map[string]bool{
-			core.QTypeSingleChoice: true,
-			core.QTypeMultiChoice:  true,
-			core.QTypeJudge:        true,
-			core.QTypeFillIn:       true,
-			core.QTypeEssay:        true,
-		},
-		filterDiff:    core.DiffAll,
-		selectedQIDs:  make(map[string]bool),
-		selectedUsers: make(map[int]bool),
+		sourceTab:        0,
+		selectedQIDs:     make(map[string]bool),
+		selectedUsers:    make(map[int]bool),
+		typeScores:       make(map[string]float64),
+		typeScoreEntries: make(map[string]*widget.Entry),
+	}
+	for _, t := range []string{"单选题", "多选题", "判断题", "填空题", "问答题"} {
+		ws.typeScores[t] = 1.0
 	}
 
 	wizardPages := []fyne.CanvasObject{
 		buildSourcePage(ws, w, state),
 		buildExamParamsPage(ws, w, state),
-		buildFilterPage(ws),
 		buildQuestionSelectPage(ws),
 		buildUserSelectPage(ws, state),
 		buildConfirmPage(ws, w, state),
+		buildTemplateListPage(ws, w, state),
 	}
 
 	ws.wizard = container.NewAppTabs(
 		container.NewTabItem(core.AdminTabSource, wizardPages[0]),
 		container.NewTabItem(core.AdminTabExamParams, wizardPages[1]),
-		container.NewTabItem(core.AdminTabFilter, wizardPages[2]),
-		container.NewTabItem(core.AdminTabSelect, wizardPages[3]),
-		container.NewTabItem(core.AdminTabUser, wizardPages[4]),
-		container.NewTabItem(core.AdminTabConfirm, wizardPages[5]),
+		container.NewTabItem(core.AdminTabSelect, wizardPages[2]),
+		container.NewTabItem(core.AdminTabUser, wizardPages[3]),
+		container.NewTabItem(core.AdminTabConfirm, wizardPages[4]),
+		container.NewTabItem(core.AdminTabTemplates, wizardPages[5]),
 	)
 	ws.wizard.SetTabLocation(container.TabLocationLeading)
 	ws.wizard.OnSelected = func(item *container.TabItem) {
 		switch item.Text {
+		case core.AdminTabSource:
+			ws.wizard.Items[0].Content = buildSourcePage(ws, w, state)
+			ws.wizard.Refresh()
+		case core.AdminTabExamParams:
+			ws.wizard.Items[1].Content = buildExamParamsPage(ws, w, state)
+			ws.wizard.Refresh()
 		case core.AdminTabSelect:
-			ws.wizard.Items[3].Content = buildQuestionSelectPage(ws)
+			ws.wizard.Items[2].Content = buildQuestionSelectPage(ws)
 			ws.wizard.Refresh()
 		case core.AdminTabUser:
-			ws.wizard.Items[4].Content = buildUserSelectPage(ws, state)
+			ws.wizard.Items[3].Content = buildUserSelectPage(ws, state)
 			ws.wizard.Refresh()
 		case core.AdminTabConfirm:
-			ws.wizard.Items[5].Content = buildConfirmPage(ws, w, state)
+			ws.wizard.Items[4].Content = buildConfirmPage(ws, w, state)
 			ws.wizard.Refresh()
+		case core.AdminTabTemplates:
+			// 只有在点击"考试列表"标签时才加载数据
+			ws.wizard.Items[5].Content = buildTemplateListPage(ws, w, state)
+			ws.wizard.Refresh()
+			// 触发模板列表数据加载
+			if ws.templateRefreshFunc != nil {
+				ws.templateRefreshFunc()
+			}
 		}
 	}
 
@@ -385,7 +401,7 @@ func buildSourcePage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSta
 						bankQuestions := convertBankDataToQuestions(&bankData)
 						ws.localQuestions = append(ws.localQuestions, bankQuestions...)
 					}
-					updateSourceSelection(ws, localBtn, serverBtn)
+					updateSourceSelection(ws, localBtn, serverBtn, w, state)
 				})
 
 			// 取消按钮（标识符：cancelBtn，名称："取消"）：关闭本地题库选择对话框，不执行任何加载操作。
@@ -513,7 +529,7 @@ func buildSourcePage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSta
 
 								downloadCount++
 								if downloadCount == totalBanks {
-									updateSourceSelection(ws, localBtn, serverBtn)
+									updateSourceSelection(ws, localBtn, serverBtn, w, state)
 								}
 							})
 						}
@@ -581,16 +597,20 @@ func buildSourcePage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSta
 //   - ws: *AdminExamCreateState，管理员考试创建状态对象。
 //   - localBtn: *customElements.CustomButton，本地题库按钮引用。
 //   - serverBtn: *customElements.CustomButton，服务器题库按钮引用。
-func updateSourceSelection(ws *AdminExamCreateState, localBtn, serverBtn *customElements.CustomButton) {
+func updateSourceSelection(ws *AdminExamCreateState, localBtn, serverBtn *customElements.CustomButton, w fyne.Window, state *core.AppState) {
 	localBtn.Refresh()
 	serverBtn.Refresh()
 	refreshQuestionList(ws)
+	if ws.wizard != nil && len(ws.wizard.Items) > 1 {
+		ws.wizard.Items[1].Content = buildExamParamsPage(ws, w, state)
+		ws.wizard.Refresh()
+	}
 }
 
-// refreshQuestionList 根据当前筛选条件和题库来源刷新题目列表显示。
+// refreshQuestionList 根据题库来源刷新题目列表显示。
 //
 // 功能说明：
-// 根据当前考试参数确认状态、题库来源（本地或服务器）以及筛选条件，重新渲染并刷新题目列表的UI显示。
+// 根据当前考试参数确认状态、题库来源（本地或服务器），重新渲染并刷新题目列表的UI显示。
 //
 // 输入参数：
 //   - ws: *AdminExamCreateState，管理员考试创建状态对象。
@@ -622,60 +642,6 @@ func refreshQuestionList(ws *AdminExamCreateState) {
 
 // ==================== Step 2: 筛选条件 ====================
 
-// buildFilterPage 构建筛选条件页面，包含题型复选框和难度下拉选择。
-//
-// 功能说明：
-// 构建考试创建向导的第三步页面，允许用户通过复选框选择题型（单选题、多选题、判断题、填空题、问答题），
-// 并通过下拉列表选择难度级别（全部、简单、中等、困难）。筛选条件改变时会实时刷新题目列表。
-//
-// 输入参数：
-//   - ws: *AdminExamCreateState，管理员考试创建状态对象。
-//
-// 返回值：
-//   - fyne.CanvasObject：筛选条件页面的UI容器对象。
-func buildFilterPage(ws *AdminExamCreateState) fyne.CanvasObject {
-	typeLabels := []string{core.QTypeSingleChoice, core.QTypeMultiChoice, core.QTypeJudge, core.QTypeFillIn, core.QTypeEssay}
-	diffOptions := []string{core.DiffAll, core.DiffEasy, core.DiffMedium, core.DiffHard}
-
-	typeCheckboxes := container.NewHBox()
-	for _, t := range typeLabels {
-		tName := t
-		cb := widget.NewCheck(tName, func(checked bool) {
-			ws.filterTypes[tName] = checked
-			refreshQuestionList(ws)
-		})
-		cb.SetChecked(ws.filterTypes[tName])
-		typeCheckboxes.Add(cb)
-	}
-
-	diffSelect := widget.NewSelect(diffOptions, func(s string) {
-		ws.filterDiff = s
-		refreshQuestionList(ws)
-	})
-	diffSelect.SetSelected(core.DiffAll)
-
-	filterTitle := canvas.NewText(core.AdminFilterPageTitle, core.HexColor(core.TextPrimaryColor))
-	filterTitle.TextSize = core.FontSizeBody
-	filterTitle.TextStyle = fyne.TextStyle{Bold: true}
-	filterTitle.Alignment = fyne.TextAlignCenter
-
-	typeLabel := canvas.NewText(core.AdminTypeLabel, core.HexColor(core.TextSecondaryColor))
-	typeLabel.TextSize = core.FontSizeSmall
-
-	diffLabel := canvas.NewText(core.AdminDiffLabel, core.HexColor(core.TextSecondaryColor))
-	diffLabel.TextSize = core.FontSizeSmall
-
-	filterForm := container.NewVBox(
-		filterTitle,
-		container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH15)),
-		container.NewBorder(nil, nil, typeLabel, nil, typeCheckboxes),
-		container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH15)),
-		container.NewBorder(nil, nil, diffLabel, nil, diffSelect),
-	)
-
-	return container.NewPadded(filterForm)
-}
-
 // ==================== Step 3: 题目选择列表 ====================
 
 // buildQuestionSelectPage 构建题目选择列表页面，显示根据筛选条件过滤后的题目卡片。
@@ -690,28 +656,72 @@ func buildFilterPage(ws *AdminExamCreateState) fyne.CanvasObject {
 // 返回值：
 //   - fyne.CanvasObject：题目选择列表页面的UI容器对象。
 func buildQuestionSelectPage(ws *AdminExamCreateState) fyne.CanvasObject {
+	if !ws.examParamsConfirmed {
+		return container.NewPadded(container.NewCenter(
+			canvas.NewText(core.AdminParamsNotSetMsg, core.HexColor(core.TextMutedColor)),
+		))
+	}
+
+	if ws.questionFilterTypes == nil {
+		ws.questionFilterTypes = make(map[string]bool)
+	}
+
 	ws.qListVBox = container.NewVBox()
 	ws.qListScroll = container.NewVScroll(ws.qListVBox)
 
-	if !ws.examParamsConfirmed {
-		noData := canvas.NewText(core.AdminParamsNotSetMsg, core.HexColor(core.TextMutedColor))
-		noData.Alignment = fyne.TextAlignCenter
-		noData.TextSize = core.FontSizeDialogMsg
-		ws.qListVBox.Add(noData)
+	ws.titleLabel = buildQuestionSelectTitle(ws)
+
+	typeOrder := []string{"单选题", "多选题", "判断题", "填空题", "问答题"}
+	var checkObjs []fyne.CanvasObject
+	for _, qType := range typeOrder {
+		t := qType
+		cb := widget.NewCheck(t, func(checked bool) {
+			ws.questionFilterTypes[t] = checked
+			refreshQuestionList(ws)
+		})
+		cb.SetChecked(ws.questionFilterTypes[t])
+		checkObjs = append(checkObjs, cb)
+	}
+	filterBox := container.NewHBox(checkObjs...)
+
+	// 随机填满按钮（标识符：randomFillBtn，名称："🎲 随机填满"）：一键随机填满各题型所需数量。
+	randomFillBtn := customElements.CreateButton(
+		"🎲 随机填满",
+		110, 32,
+		core.HexColor(core.CardBgColor),
+		core.HexColor(core.BtnPrimaryBg),
+		core.HexColor(core.BtnPrimaryBg),
+		1, 14, true, false,
+		fyne.TextAlignCenter,
+		fyne.TextWrapOff,
+		fyne.TextTruncateOff,
+		func() {
+			randomFillQuestions(ws)
+			refreshQuestionList(ws)
+			updateQuestionSelectTitle(ws)
+		},
+	)
+
+	filterRow := container.NewBorder(nil, nil, filterBox, randomFillBtn)
+
+	topContainer := container.NewVBox(
+		ws.titleLabel,
+		container.NewGridWrap(fyne.NewSize(1, 6)),
+		filterRow,
+		container.NewGridWrap(fyne.NewSize(1, 6)),
+	)
+
+	if ws.sourceTab == 0 && len(ws.localQuestions) > 0 {
+		renderLocalQuestions(ws)
+	} else if ws.sourceTab == 1 && len(ws.serverQuestions) > 0 {
+		renderServerQuestions(ws)
 	} else {
-		if ws.sourceTab == 0 && len(ws.localQuestions) > 0 {
-			renderLocalQuestions(ws)
-		} else if ws.sourceTab == 1 && len(ws.serverQuestions) > 0 {
-			renderServerQuestions(ws)
-		} else {
-			noData := canvas.NewText(core.AdminNoQuestionsAvailableMsg, core.HexColor(core.TextMutedColor))
-			noData.Alignment = fyne.TextAlignCenter
-			ws.qListVBox.Add(noData)
-		}
+		noData := canvas.NewText(core.AdminNoQuestionsAvailableMsg, core.HexColor(core.TextMutedColor))
+		noData.Alignment = fyne.TextAlignCenter
+		ws.qListVBox.Add(noData)
 	}
 
-	ws.titleLabel = buildQuestionSelectTitle(ws)
-	return container.NewBorder(ws.titleLabel, nil, nil, nil, ws.qListScroll)
+	return container.NewBorder(topContainer, nil, nil, nil, ws.qListScroll)
 }
 
 // buildQuestionSelectTitle 构建题目选择页面的标题标签，显示各题型已选/所需数量。
@@ -775,10 +785,10 @@ func updateQuestionSelectTitle(ws *AdminExamCreateState) {
 	}
 }
 
-// renderLocalQuestions 渲染本地题库中的题目列表，按题型分组并应用筛选条件。
+// renderLocalQuestions 渲染本地题库中的题目列表，按题型分组。
 //
 // 功能说明：
-// 根据当前筛选条件（题型、难度）从本地题库中过滤题目，并按题型分组渲染题目卡片列表到UI容器中。
+// 从本地题库中过滤题目，并按题型分组渲染题目卡片列表到UI容器中。
 //
 // 输入参数：
 //   - ws: *AdminExamCreateState，管理员考试创建状态对象。
@@ -788,13 +798,13 @@ func renderLocalQuestions(ws *AdminExamCreateState) {
 	typeOrder := []string{"单选题", "多选题", "判断题", "填空题", "问答题"}
 	groupedMap := make(map[string][]core.Question)
 	for _, q := range ws.localQuestions {
-		if !applyFilter(q, ws.filterTypes, ws.filterDiff) {
-			continue
-		}
 		groupedMap[q.Type] = append(groupedMap[q.Type], q)
 	}
 
 	for _, qType := range typeOrder {
+		if !ws.questionFilterTypes[qType] {
+			continue
+		}
 		questions, ok := groupedMap[qType]
 		if !ok || len(questions) == 0 {
 			continue
@@ -809,17 +819,17 @@ func renderLocalQuestions(ws *AdminExamCreateState) {
 	}
 
 	if len(ws.qListVBox.Objects) == 0 {
-		noData := canvas.NewText(core.AdminNoFilteredQuestionsMsg, core.HexColor(core.TextMutedColor))
+		noData := canvas.NewText(core.AdminNoQuestionsAvailableMsg, core.HexColor(core.TextMutedColor))
 		noData.Alignment = fyne.TextAlignCenter
 		noData.TextSize = core.AdminInfoTextSize
 		ws.qListVBox.Add(noData)
 	}
 }
 
-// renderServerQuestions 渲染服务器题库中的题目列表，按题型分组并应用筛选条件。
+// renderServerQuestions 渲染服务器题库中的题目列表，按题型分组。
 //
 // 功能说明：
-// 根据当前筛选条件（题型、难度）从服务器题库中过滤题目，并按题型分组渲染题目卡片列表到UI容器中。
+// 从服务器题库中过滤题目，并按题型分组渲染题目卡片列表到UI容器中。
 // 仅显示模板配置中所需数量大于0的题型对应的题目。
 //
 // 输入参数：
@@ -839,13 +849,13 @@ func renderServerQuestions(ws *AdminExamCreateState) {
 		if required == 0 {
 			continue
 		}
-		if !applyFilter(*localQ, ws.filterTypes, ws.filterDiff) {
-			continue
-		}
 		groupedMap[q.Type] = append(groupedMap[q.Type], *localQ)
 	}
 
 	for _, qType := range typeOrder {
+		if !ws.questionFilterTypes[qType] {
+			continue
+		}
 		questions, ok := groupedMap[qType]
 		if !ok || len(questions) == 0 {
 			continue
@@ -860,7 +870,7 @@ func renderServerQuestions(ws *AdminExamCreateState) {
 	}
 
 	if len(ws.qListVBox.Objects) == 0 {
-		noData := canvas.NewText(core.AdminNoFilteredQuestionsMsg, core.HexColor(core.TextMutedColor))
+		noData := canvas.NewText(core.AdminNoQuestionsAvailableMsg, core.HexColor(core.TextMutedColor))
 		noData.Alignment = fyne.TextAlignCenter
 		noData.TextSize = core.AdminInfoTextSize
 		ws.qListVBox.Add(noData)
@@ -1127,6 +1137,17 @@ func applyTemplate(ws *AdminExamCreateState) {
 		ws.typeEntries["填空题"].SetText(fmt.Sprintf("%d", ws.templateDetail.BlankCount))
 		ws.typeEntries["问答题"].SetText(fmt.Sprintf("%d", ws.templateDetail.EssayCount))
 	}
+	if ws.typeScoreEntries != nil {
+		for _, t := range []string{"单选题", "多选题", "判断题", "填空题", "问答题"} {
+			if ws.typeScoreEntries[t] != nil {
+				ws.typeScoreEntries[t].SetText("1")
+			}
+			if ws.typeScores == nil {
+				ws.typeScores = make(map[string]float64)
+			}
+			ws.typeScores[t] = 1.0
+		}
+	}
 }
 
 // buildExamParamsPage 构建考试参数设置页面，包含考试名称、时长、时间及各题型数量输入框。
@@ -1143,6 +1164,12 @@ func applyTemplate(ws *AdminExamCreateState) {
 // 返回值：
 //   - fyne.CanvasObject：考试参数设置页面的UI容器对象。
 func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppState) fyne.CanvasObject {
+	if len(ws.localBankKeys) == 0 && len(ws.serverBankIDs) == 0 {
+		return container.NewPadded(container.NewCenter(
+			canvas.NewText(core.AdminSourceNotSetMsg, core.HexColor(core.TextMutedColor)),
+		))
+	}
+
 	makeFormLabel := func(text string) *widget.Label {
 		lbl := widget.NewLabel(text)
 		lbl.TextStyle = fyne.TextStyle{Bold: true}
@@ -1151,14 +1178,38 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 
 	ws.nameEntry = widget.NewEntry()
 	ws.nameEntry.SetPlaceHolder(core.AdminExamParamsNamePlaceholder)
+	if ws.examName != "" {
+		ws.nameEntry.SetText(ws.examName)
+	}
+	ws.nameEntry.OnChanged = func(s string) {
+		ws.examName = s
+	}
 	nameRow := container.NewBorder(nil, nil, makeFormLabel(core.AdminExamParamsNameLabel), nil, ws.nameEntry)
 
 	ws.durationEntry = widget.NewEntry()
 	ws.durationEntry.SetPlaceHolder(core.AdminExamDurationPlaceholder)
+	if ws.durationMin > 0 {
+		ws.durationEntry.SetText(fmt.Sprintf("%d", ws.durationMin))
+	}
+	ws.durationEntry.OnChanged = func(s string) {
+		val, _ := strconv.Atoi(s)
+		ws.durationMin = val
+	}
 	durationRow := container.NewBorder(nil, nil, makeFormLabel(core.AdminExamDurationLabel), nil, ws.durationEntry)
 
-	ws.startTimeLbl = widget.NewLabel(time.Now().Format("2006-01-02 15:04"))
-	ws.endTimeLbl = widget.NewLabel(time.Now().Add(2 * time.Hour).Format("2006-01-02 15:04"))
+	startTimeDefault := time.Now().Format("2006-01-02 15:04")
+	if ws.startTimeStr != "" {
+		startTimeDefault = ws.startTimeStr
+	}
+	endTimeDefault := time.Now().Add(2 * time.Hour).Format("2006-01-02 15:04")
+	if ws.endTimeStr != "" {
+		endTimeDefault = ws.endTimeStr
+	}
+
+	ws.startTimeLbl = widget.NewLabel(startTimeDefault)
+	ws.endTimeLbl = widget.NewLabel(endTimeDefault)
+	ws.startTimeStr = startTimeDefault
+	ws.endTimeStr = endTimeDefault
 
 	// 设置时间按钮（标识符：setTimeBtn返回的自定义按钮对象，名称："设置时间"）：点击后快速将对应的时间标签设置为当前时间或当前时间加偏移量。
 	setTimeBtn := func(lbl *widget.Label, defaultOffset time.Duration) *customElements.CustomButton {
@@ -1175,7 +1226,13 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 			fyne.TextTruncateOff, // 👈 不换行（截断）
 			func() {
 				now := time.Now().Add(defaultOffset)
-				lbl.SetText(now.Format("2006-01-02 15:04"))
+				formatted := now.Format("2006-01-02 15:04")
+				lbl.SetText(formatted)
+				if lbl == ws.startTimeLbl {
+					ws.startTimeStr = formatted
+				} else if lbl == ws.endTimeLbl {
+					ws.endTimeStr = formatted
+				}
 			},
 		)
 	}
@@ -1185,32 +1242,71 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 
 	typeLabels := []string{"单选题", "多选题", "判断题", "填空题", "问答题"}
 	typeEntries := make(map[string]*widget.Entry)
+	typeScoreEntries := make(map[string]*widget.Entry)
 	var typeCards []fyne.CanvasObject
 
 	for _, t := range typeLabels {
-		entry := widget.NewEntry()
-		entry.SetPlaceHolder(core.AdminTypeEntryPlaceholder)
-		typeEntries[t] = entry
-
-		compactEntry := container.NewGridWrap(fyne.NewSize(core.TypeEntryBoxSizeW, core.TypeEntryBoxSizeH), entry)
-		label := widget.NewLabel(t + ":")
+		tName := t
+		label := widget.NewLabel(t)
 		label.TextStyle = fyne.TextStyle{Bold: true}
 
+		countEntry := widget.NewEntry()
+		countEntry.SetPlaceHolder(core.AdminTypeEntryPlaceholder)
+		if ws.typeCounts != nil {
+			if count, ok := ws.typeCounts[tName]; ok && count > 0 {
+				countEntry.SetText(fmt.Sprintf("%d", count))
+			}
+		}
+		countEntry.OnChanged = func(s string) {
+			val, _ := strconv.Atoi(s)
+			if ws.typeCounts == nil {
+				ws.typeCounts = make(map[string]int)
+			}
+			ws.typeCounts[tName] = val
+		}
+		typeEntries[tName] = countEntry
+
+		scoreEntry := widget.NewEntry()
+		scoreEntry.SetPlaceHolder("分值")
+		defaultScore := 1.0
+		if ws.typeScores != nil {
+			if sc, ok := ws.typeScores[tName]; ok {
+				defaultScore = sc
+			}
+		}
+		scoreEntry.SetText(fmt.Sprintf("%g", defaultScore))
+		scoreEntry.OnChanged = func(s string) {
+			val, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				val = 1.0
+			}
+			if ws.typeScores == nil {
+				ws.typeScores = make(map[string]float64)
+			}
+			ws.typeScores[tName] = val
+		}
+		typeScoreEntries[tName] = scoreEntry
+
+		compactCount := container.NewGridWrap(fyne.NewSize(55, core.TypeEntryBoxSizeH), countEntry)
+		compactScore := container.NewGridWrap(fyne.NewSize(55, core.TypeEntryBoxSizeH), scoreEntry)
+
 		itemBox := container.NewHBox(
-			layout.NewSpacer(),
 			label,
-			compactEntry,
 			layout.NewSpacer(),
+			widget.NewLabel("题数:"),
+			compactCount,
+			widget.NewLabel("分值:"),
+			compactScore,
 		)
 
-		typeCard := container.NewGridWrap(fyne.NewSize(core.TypeCardGridWrapWidth, core.TypeCardGridWrapHeight), itemBox)
+		typeCard := container.NewGridWrap(fyne.NewSize(280, core.TypeCardGridWrapHeight), itemBox)
 		typeCards = append(typeCards, typeCard)
 	}
 
 	ws.typeEntries = typeEntries
-	ws.examParamsConfirmed = false
+	ws.typeScoreEntries = typeScoreEntries
 
-	typeGridFlow := container.NewGridWrap(fyne.NewSize(core.TypeCardGridWrapWidth, core.TypeCardGridWrapHeight), typeCards...)
+	typeGridFlow := container.NewGridWrap(fyne.NewSize(280, core.TypeCardGridWrapHeight), typeCards...)
 	typeCountsSection := container.NewVBox(
 		makeFormLabel(core.AdminTypeSettingsTitle),
 		typeGridFlow,
@@ -1249,8 +1345,16 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 				return
 			}
 
+			ws.examName = ws.nameEntry.Text
+			ws.startTimeStr = ws.startTimeLbl.Text
+			ws.endTimeStr = ws.endTimeLbl.Text
+
 			totalQuestions := 0
+			totalScore := 0.0
 			ws.typeCounts = make(map[string]int)
+			if ws.typeScores == nil {
+				ws.typeScores = make(map[string]float64)
+			}
 			for _, t := range typeLabels {
 				val := typeEntries[t].Text
 				count := 0
@@ -1258,7 +1362,18 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 					count, _ = strconv.Atoi(val)
 				}
 				ws.typeCounts[t] = count
+
+				scoreVal := typeScoreEntries[t].Text
+				sc := 1.0
+				if scoreVal != "" {
+					if parsed, err := strconv.ParseFloat(scoreVal, 64); err == nil && parsed >= 0 {
+						sc = parsed
+					}
+				}
+				ws.typeScores[t] = sc
+
 				totalQuestions += count
+				totalScore += float64(count) * sc
 			}
 
 			if totalQuestions == 0 {
@@ -1268,15 +1383,17 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 
 			ws.examParamsConfirmed = true
 
-			if ws.wizard != nil && len(ws.wizard.Items) > 3 {
+			if ws.wizard != nil && len(ws.wizard.Items) > 2 {
 				qSelectPage := buildQuestionSelectPage(ws)
-				ws.wizard.Items[3] = container.NewTabItem(ws.wizard.Items[3].Text, qSelectPage)
+				ws.wizard.Items[2] = container.NewTabItem(ws.wizard.Items[2].Text, qSelectPage)
 				ws.wizard.Refresh()
 			}
 
 			typeDetails := ""
 			for _, t := range typeLabels {
-				typeDetails += fmt.Sprintf("%s: %d题  |  ", t, ws.typeCounts[t])
+				if ws.typeCounts[t] > 0 {
+					typeDetails += fmt.Sprintf("%s: %d题(%.1f分/题)  |  ", t, ws.typeCounts[t], ws.typeScores[t])
+				}
 			}
 			typeDetails = strings.TrimSuffix(typeDetails, "  |  ")
 
@@ -1290,7 +1407,7 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 				canvas.NewText(fmt.Sprintf("⏱️ 考试时长：%d 分钟", ws.durationMin), core.HexColor(core.TextBodyColor)),
 				canvas.NewText(fmt.Sprintf("🕒 考试时间：%s 至 %s", ws.startTimeLbl.Text, ws.endTimeLbl.Text), core.HexColor(core.TextBodyColor)),
 				typeDetailsLbl,
-				canvas.NewText(fmt.Sprintf("🎯 试卷总题数：%d 题", totalQuestions), core.HexColor(core.ColorSelectedBorder)),
+				canvas.NewText(fmt.Sprintf("🎯 试卷总题数：%d 题，总分：%.1f 分", totalQuestions, totalScore), core.HexColor(core.ColorSelectedBorder)),
 			)
 
 			summaryCard := container.NewPadded(summaryContent)
@@ -1323,15 +1440,50 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 		layout.NewSpacer(),
 	)
 
-	mainContainer = container.NewVBox(
-		nameRow,
-		durationRow,
-		startRow,
-		endRow,
-		typeCountsSection,
-		container.NewGridWrap(fyne.NewSize(1, 8)),
-		bottomBtnRow,
-	)
+	var initialObjects []fyne.CanvasObject
+	initialObjects = append(initialObjects, nameRow, durationRow, startRow, endRow, typeCountsSection)
+
+	if ws.examParamsConfirmed {
+		totalQuestions := 0
+		totalScore := 0.0
+		typeDetails := ""
+		if ws.typeCounts != nil {
+			for _, t := range typeLabels {
+				count := ws.typeCounts[t]
+				sc := 1.0
+				if ws.typeScores != nil {
+					if s, ok := ws.typeScores[t]; ok {
+						sc = s
+					}
+				}
+				totalQuestions += count
+				totalScore += float64(count) * sc
+				if count > 0 {
+					typeDetails += fmt.Sprintf("%s: %d题(%.1f分/题)  |  ", t, count, sc)
+				}
+			}
+		}
+		typeDetails = strings.TrimSuffix(typeDetails, "  |  ")
+		typeDetailsLbl := widget.NewLabel(fmt.Sprintf(core.AdminTypeDistributionLabel, typeDetails))
+		typeDetailsLbl.Wrapping = fyne.TextWrapWord
+
+		summaryContent := container.NewVBox(
+			canvas.NewText(core.AdminSuccessSetConfirmed, core.HexColor(core.ColorSelectedBorder)),
+			container.NewGridWrap(fyne.NewSize(1, 4)),
+			canvas.NewText(fmt.Sprintf("📋 考试名称：%s", ws.examName), core.HexColor(core.TextPrimaryColor)),
+			canvas.NewText(fmt.Sprintf("⏱️ 考试时长：%d 分钟", ws.durationMin), core.HexColor(core.TextBodyColor)),
+			canvas.NewText(fmt.Sprintf("🕒 考试时间：%s 至 %s", ws.startTimeStr, ws.endTimeStr), core.HexColor(core.TextBodyColor)),
+			typeDetailsLbl,
+			canvas.NewText(fmt.Sprintf("🎯 试卷总题数：%d 题，总分：%.1f 分", totalQuestions, totalScore), core.HexColor(core.ColorSelectedBorder)),
+		)
+		summaryCard := container.NewPadded(summaryContent)
+		initialObjects = append(initialObjects, summaryCard)
+	} else {
+		initialObjects = append(initialObjects, container.NewGridWrap(fyne.NewSize(1, 8)))
+	}
+
+	initialObjects = append(initialObjects, bottomBtnRow)
+	mainContainer = container.NewVBox(initialObjects...)
 
 	ws.examParamsContent = mainContainer
 	return container.NewPadded(mainContainer)
@@ -1579,15 +1731,54 @@ func buildConfirmPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSt
 			}
 			sort.Ints(targetUserIDs)
 
-			var qIDs []string
-			for id := range ws.selectedQIDs {
-				qIDs = append(qIDs, id)
-			}
-
-			typeCounts := make(map[string]int)
-			if ws.typeCounts != nil {
-				for k, v := range ws.typeCounts {
-					typeCounts[k] = v
+			var questions []network.ServerQuestion
+			if ws.sourceTab == 0 {
+				for _, lq := range ws.localQuestions {
+					if ws.selectedQIDs[lq.ID] {
+						opts := make(map[string]string)
+						for _, opt := range lq.Options {
+							opts[opt.Label] = opt.Text
+						}
+						score := 1.0
+						if ws.typeScores != nil {
+							if sc, ok := ws.typeScores[lq.Type]; ok {
+								score = sc
+							}
+						}
+						questions = append(questions, network.ServerQuestion{
+							ID:         lq.ID,
+							Type:       lq.Type,
+							Content:    lq.Content,
+							Options:    opts,
+							Answer:     strings.Join(lq.Answers, ""),
+							Difficulty: lq.Difficulty,
+							Score:      score,
+						})
+					}
+				}
+			} else {
+				for _, sq := range ws.serverQuestions {
+					sqID := fmt.Sprintf("%v", sq.ID)
+					if ws.selectedQIDs[sqID] {
+						score := sq.Score
+						if score <= 0 {
+							score = 1.0
+						}
+						if ws.typeScores != nil {
+							if sc, ok := ws.typeScores[sq.Type]; ok && sc > 0 {
+								score = sc
+							}
+						}
+						questions = append(questions, network.ServerQuestion{
+							ID:         sq.ID,
+							Type:       sq.Type,
+							Content:    sq.Content,
+							Options:    sq.Options,
+							Answer:     sq.Answer,
+							Difficulty: sq.Difficulty,
+							Score:      score,
+						})
+					}
 				}
 			}
 
@@ -1596,8 +1787,7 @@ func buildConfirmPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSt
 				DurationMin:   ws.durationMin,
 				StartTime:     ws.startTimeLbl.Text,
 				EndTime:       ws.endTimeLbl.Text,
-				QuestionIDs:   qIDs,
-				TypeCounts:    typeCounts,
+				Questions:     questions,
 				TargetUserIDs: targetUserIDs,
 			}
 
@@ -1645,14 +1835,17 @@ func buildConfirmPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSt
 		"目标用户: " + fmt.Sprintf("%d 人", len(ws.selectedUsers)),
 	}
 
-	summaryText := canvas.NewText(strings.Join(summaryItems, "\n\n"), core.HexColor(core.TextBodyColor))
-	summaryText.TextSize = core.AdminSummaryTextSize
-	summaryText.Alignment = fyne.TextAlignCenter
+	summaryStr := strings.Join(summaryItems, "\n\n")
+	fmt.Printf("[CONFIRM_PAGE] summaryItems: %v\n", summaryItems)
+	fmt.Printf("[CONFIRM_PAGE] summaryStr: %q\n", summaryStr)
+
+	summaryLbl := widget.NewLabel(summaryStr)
+	summaryLbl.Alignment = fyne.TextAlignCenter
 
 	return container.NewPadded(container.NewVBox(
 		title,
 		container.NewGridWrap(fyne.NewSize(1, 20)),
-		summaryText,
+		summaryLbl,
 		container.NewGridWrap(fyne.NewSize(1, 30)),
 		container.NewCenter(ws.createBtn),
 	))
@@ -1983,28 +2176,6 @@ func serverQuestionToLocal(q *network.ServerQuestion) *core.Question {
 	}
 }
 
-// applyFilter 根据题型和难度筛选条件判断题目是否应该被显示。
-//
-// 功能说明：
-// 根据用户设置的筛选条件（题型集合 filterTypes 和难度 filterDiff）判断指定题目是否应该被显示在题目列表中。
-//
-// 输入参数：
-//   - q: core.Question，题目对象。
-//   - filterTypes: map[string]bool，题型筛选条件映射（key为题型名称，value为是否选中）。
-//   - filterDiff: string，难度筛选条件。
-//
-// 返回值：
-//   - bool：若题目符合筛选条件返回 true；否则返回 false。
-func applyFilter(q core.Question, filterTypes map[string]bool, filterDiff string) bool {
-	if !filterTypes[q.Type] {
-		return false
-	}
-	if filterDiff != "全部" && q.Difficulty != filterDiff {
-		return false
-	}
-	return true
-}
-
 // convertBankDataToQuestions 将本地题库数据转换为本地题目结构体列表。
 //
 // 功能说明：
@@ -2040,4 +2211,327 @@ func convertBankDataToQuestions(bankData *parser.BankData) []core.Question {
 		})
 	}
 	return questions
+}
+
+// randomFillQuestions 随机填满各题型缺少的题目
+//
+// 功能说明：
+// 根据考试参数中配置的每种题型所需数量（ws.typeCounts），从未被选中的可用题目中随机挑选并标记选中，直到达到所需数量。
+//
+// 输入参数：
+//   - ws: *AdminExamCreateState，管理员考试创建状态对象。
+func randomFillQuestions(ws *AdminExamCreateState) {
+	if ws == nil || len(ws.typeCounts) == 0 {
+		return
+	}
+
+	var allQuestions []core.Question
+	if ws.sourceTab == 0 {
+		allQuestions = ws.localQuestions
+	} else {
+		for _, sq := range ws.serverQuestions {
+			allQuestions = append(allQuestions, *serverQuestionToLocal(&sq))
+		}
+	}
+
+	typeMap := make(map[string][]core.Question)
+	for _, q := range allQuestions {
+		typeMap[q.Type] = append(typeMap[q.Type], q)
+	}
+
+	rand.Seed(time.Now().UnixNano())
+
+	for qType, required := range ws.typeCounts {
+		if required <= 0 {
+			continue
+		}
+		currentCount := 0
+		var unselected []core.Question
+		for _, q := range typeMap[qType] {
+			if ws.selectedQIDs[q.ID] {
+				currentCount++
+			} else {
+				unselected = append(unselected, q)
+			}
+		}
+
+		needed := required - currentCount
+		if needed <= 0 {
+			continue
+		}
+
+		if len(unselected) <= needed {
+			for _, q := range unselected {
+				ws.selectedQIDs[q.ID] = true
+			}
+		} else {
+			rand.Shuffle(len(unselected), func(i, j int) {
+				unselected[i], unselected[j] = unselected[j], unselected[i]
+			})
+			for i := 0; i < needed; i++ {
+				ws.selectedQIDs[unselected[i].ID] = true
+			}
+		}
+	}
+}
+
+// buildTemplateListPage 构建考试模板列表页面，显示所有考试模板并支持取消考试操作。
+//
+// 功能说明：
+// 构建考试创建向导的第一步页面，显示所有考试模板的列表，并提供刷新、编辑、删除、取消考试和导出结果等功能。
+//
+// 输入参数：
+//   - ws: *AdminExamCreateState，管理员考试创建状态对象。
+//   - w: fyne.Window，当前窗口对象，用于显示对话框。
+//   - state: *core.AppState，全局应用状态对象。
+//
+// 返回值：
+//   - fyne.CanvasObject：考试模板列表页面的UI容器对象。
+func buildTemplateListPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppState) fyne.CanvasObject {
+	// Template list
+	var templateListVBox *fyne.Container
+	var refreshTemplateList func()
+
+	refreshTemplateList = func() {
+		if !state.IsLoggedIn {
+			return
+		}
+
+		state.FetchTemplates(100, 0, func(success bool, templates []network.TemplateItem, total int, msg string) {
+			if !success {
+				return
+			}
+
+			if templateListVBox == nil {
+				templateListVBox = container.NewVBox()
+			}
+
+			if len(templates) == 0 {
+				noDataText := customElements.CreateLabel("暂无考试模板", core.HexColor(core.TextMutedColor), core.FontSizeSubtitle, false, true, false)
+				templateListVBox.Objects = []fyne.CanvasObject{container.NewPadded(noDataText)}
+				templateListVBox.Refresh()
+				return
+			}
+
+			// Fetch details for each template and render cards preserving order
+			var mu sync.Mutex
+			fetchedCount := 0
+
+			type templateDetailData struct {
+				Item   network.TemplateItem
+				Detail *network.TemplateDetailItem
+			}
+			results := make([]templateDetailData, len(templates))
+
+			for i, tmpl := range templates {
+				go func(idx int, item network.TemplateItem) {
+					state.GetTemplateDetail(item.TemplateID, func(success bool, detail *network.TemplateDetailItem, detailMsg string) {
+						mu.Lock()
+						results[idx] = templateDetailData{Item: item, Detail: detail}
+						fetchedCount++
+						isDone := (fetchedCount == len(templates))
+						mu.Unlock()
+
+						if isDone {
+							var objects []fyne.CanvasObject
+							for _, res := range results {
+								resItem := res.Item // copy for closures
+								tmplCard := buildTemplateCardForPushExamWithDetail(&resItem, res.Detail, state, func() {
+									showDeleteTemplateConfirmForPushExam(w, state, &resItem, func() {
+										refreshTemplateList()
+									})
+								})
+								objects = append(objects, tmplCard, container.NewGridWrap(fyne.NewSize(1, 8)))
+							}
+
+							// Safely update the container objects on completion
+							templateListVBox.Objects = objects
+							fyne.Do(func() { templateListVBox.Refresh() })
+						}
+					})
+				}(i, tmpl)
+			}
+		})
+	}
+
+	// 保存刷新函数到状态中，供点击时调用
+	ws.templateRefreshFunc = refreshTemplateList
+
+	scrollContent := container.NewVScroll(templateListVBox)
+	scrollContent.SetMinSize(fyne.NewSize(0, 400))
+
+	pageBg := canvas.NewRectangle(core.HexColor(core.PageBgColor))
+
+	mainLayout := container.NewBorder(nil, nil, nil, nil, scrollContent)
+	wRootLayout := container.NewStack(pageBg, mainLayout)
+
+	return wRootLayout
+}
+
+// buildTemplateCardForPushExamWithDetail 为模板项创建一个卡片，只保留删除按钮。
+//
+// 参数:
+//   - tmpl: *network.TemplateItem 类型，表示模板项的基本信息。
+//   - detail: *network.TemplateDetailItem 类型，表示模板项的详细信息（各题型数量）。
+//   - state: *core.AppState 类型，表示全局应用状态。
+//   - onDelete: func() 类型，删除按钮的回调函数。
+//
+// 返回值:
+//   - fyne.CanvasObject 类型，返回构建好的模板卡片对象。
+func buildTemplateCardForPushExamWithDetail(tmpl *network.TemplateItem, detail *network.TemplateDetailItem, state *core.AppState, onDelete func()) fyne.CanvasObject {
+	// Card background
+	bg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
+	bg.CornerRadius = core.TemplateCardCornerRadius
+
+	// Template name
+	nameText := customElements.CreateLabel("📋 "+tmpl.ExamName, core.HexColor(core.TextPrimaryColor), core.FontSizeHeading, true, true, false)
+
+	// Status badge
+	statusColor := core.TextMutedColor
+	statusText := tmpl.Status
+	switch tmpl.Status {
+	case "draft":
+		statusColor = core.TextHintColor
+		statusText = core.TemplateStatusDraftText
+	case "active":
+		statusColor = core.BtnPrimaryBg
+		statusText = core.TemplateStatusActiveText
+	case "expired":
+		statusColor = core.ColorWrongBorder
+		statusText = core.TemplateStatusExpiredText
+	}
+	statusBadge := canvas.NewText("● "+statusText, core.HexColor(statusColor))
+	statusBadge.TextSize = core.TemplateStatusBadgeFontSize
+
+	// Info row
+	infoParts := []string{
+		fmt.Sprintf(core.TemplateInfoQuestionCountLabel, tmpl.QuestionCount),
+		fmt.Sprintf(core.TemplateInfoDurationLabel, tmpl.DurationMin),
+		fmt.Sprintf(core.TemplateInfoSourceLabel, tmpl.BankSource),
+	}
+
+	// Add per-type counts if available
+	if detail != nil {
+		var typeParts []string
+		if detail.SingleCount > 0 {
+			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeSingleChoice, detail.SingleCount))
+		}
+		if detail.MultiCount > 0 {
+			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeMultiChoice, detail.MultiCount))
+		}
+		if detail.JudgeCount > 0 {
+			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeJudge, detail.JudgeCount))
+		}
+		if detail.BlankCount > 0 {
+			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeFillIn, detail.BlankCount))
+		}
+		if detail.EssayCount > 0 {
+			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeEssay, detail.EssayCount))
+		}
+		if len(typeParts) > 0 {
+			infoParts = append(infoParts, core.TemplateInfoTypePrefix+strings.Join(typeParts, "/"))
+		}
+	}
+
+	infoText := canvas.NewText(strings.Join(infoParts, "  |  "), core.HexColor(core.TextSecondaryColor))
+	infoText.TextSize = core.TemplateInfoTextFontSize
+
+	// Time info
+	timeText := canvas.NewText(fmt.Sprintf("开始: %s\n结束: %s", tmpl.StartTime, tmpl.EndTime), core.HexColor(core.TextMutedColor))
+	timeText.TextSize = core.TemplateTimeTextFontSize
+
+	// 删除按钮：标识符为"deleteBtn"，功能为点击后弹出确认对话框以删除当前模板（调用 onDelete 回调）。
+	deleteBtn := customElements.CreateButton(
+		core.TemplateDeleteBtnText,
+		core.TemplateDeleteBtnWidth,
+		core.TemplateBtnHeight,
+		core.HexColor(core.CardBgColor),
+		core.HexColor(core.ColorErrorBg),
+		core.HexColor(core.ColorErrorBorder),
+		core.StrokeMedium,
+		core.FontSizeButton,
+		true,
+		false,
+		fyne.TextAlignCenter, // 👈 居中对齐
+		fyne.TextWrapOff,     // 👈 不换行
+		fyne.TextTruncateOff, // 👈 不换行（截断）
+		onDelete,
+	)
+
+	btnRow := container.NewHBox(deleteBtn)
+
+	cardContent := container.NewVBox(
+		container.NewBorder(nameText, nil, statusBadge, nil, nil),
+		container.NewGridWrap(fyne.NewSize(1, 8)),
+		infoText,
+		container.NewGridWrap(fyne.NewSize(1, 5)),
+		timeText,
+		container.NewGridWrap(fyne.NewSize(1, 10)),
+		btnRow,
+	)
+
+	return container.NewStack(
+		bg,
+		container.NewPadded(cardContent),
+	)
+}
+
+// showDeleteTemplateConfirmForPushExam 显示用于删除模板的确认对话框（用于推送考试模板列表页面）。
+//
+// 参数:
+//   - w: fyne.Window 类型，表示当前窗口对象，用于显示对话框。
+//   - state: *core.AppState 类型，表示全局应用状态，用于执行删除模板操作。
+//   - tmpl: *network.TemplateItem 类型，表示要删除的模板项的基本信息。
+//   - onDeleted: func() 类型，删除成功后的回调函数，用于刷新模板列表。
+func showDeleteTemplateConfirmForPushExam(w fyne.Window, state *core.AppState, tmpl *network.TemplateItem, onDeleted func()) {
+	customElements.ShowCustomConfirm(
+		core.TemplateDeleteConfirmTitle,
+		"确定",
+		"取消",
+		customElements.NewCenterRichText(fmt.Sprintf(core.TemplateDeleteConfirmMsg, tmpl.ExamName)),
+		func(confirm bool) bool {
+			if confirm {
+				state.DeleteTemplate(tmpl.TemplateID, func(success bool, msg string) {
+					if success {
+						customElements.ShowCustomInformation(core.TemplateManageSuccessMsgType, core.TemplateDeleteSuccessMsg, w)
+						if onDeleted != nil {
+							onDeleted()
+						}
+					} else {
+						customElements.ShowCustomInformation(core.TemplateManageErrorMsgType, msg, w)
+					}
+				})
+			}
+			return true // 返回 true 表示对话框可以关闭
+		}, w)
+}
+
+// showCancelExamConfirmForTemplate 显示用于取消考试的确认对话框（用于模板列表页面）。
+//
+// 参数:
+//   - w: fyne.Window 类型，表示当前窗口对象，用于显示对话框。
+//   - state: *core.AppState 类型，表示全局应用状态，用于执行取消考试操作。
+//   - tmpl: *network.TemplateItem 类型，表示要取消考试的模板项的基本信息。
+//   - onCanceled: func() 类型，取消成功后的回调函数，用于刷新模板列表。
+func showCancelExamConfirmForTemplate(w fyne.Window, state *core.AppState, tmpl *network.TemplateItem, onCanceled func()) {
+	customElements.ShowCustomConfirm(
+		core.TemplateCancelExamConfirmTitle,
+		"确定",
+		"取消",
+		customElements.NewCenterRichText(fmt.Sprintf(core.TemplateCancelExamConfirmMsg, tmpl.ExamName, 0)),
+		func(confirm bool) bool {
+			if confirm {
+				state.CancelExam(tmpl.TemplateID, "", func(success bool, affectedCount int, msg string) {
+					if success {
+						customElements.ShowCustomInformation(core.TemplateManageSuccessMsgType, fmt.Sprintf(core.TemplateCancelExamSuccessMsg, affectedCount), w)
+						if onCanceled != nil {
+							onCanceled()
+						}
+					} else {
+						customElements.ShowCustomInformation(core.TemplateManageErrorMsgType, msg, w)
+					}
+				})
+			}
+			return true // 返回 true 表示对话框可以关闭
+		}, w)
 }
