@@ -43,9 +43,28 @@ import (
 //  4. 若某题型的已选数量小于所需数量 required，则返回 false。
 //  5. 所有题型均满足数量要求时，返回 true。
 func checkIfQuestionsSelectedFull(ws *AdminExamCreateState) bool {
-	if len(ws.typeCounts) == 0 {
+	if ws == nil {
+		fmt.Println("[DEBUG checkIfQuestionsSelectedFull] ws is nil")
 		return false
 	}
+	// 如果 ws.typeCounts 为空，但 ws.typeEntries 存在，尝试从 typeEntries 中同步获取
+	if len(ws.typeCounts) == 0 && ws.typeEntries != nil {
+		ws.typeCounts = make(map[string]int)
+		for t, entry := range ws.typeEntries {
+			if entry != nil && entry.Text != "" {
+				if val, err := strconv.Atoi(entry.Text); err == nil && val > 0 {
+					ws.typeCounts[t] = val
+				}
+			}
+		}
+		fmt.Printf("[DEBUG checkIfQuestionsSelectedFull] Fallback populated typeCounts from typeEntries: %+v\n", ws.typeCounts)
+	}
+
+	if len(ws.typeCounts) == 0 {
+		fmt.Println("[DEBUG checkIfQuestionsSelectedFull] ws.typeCounts is empty")
+		return false
+	}
+	fmt.Printf("[DEBUG checkIfQuestionsSelectedFull] typeCounts: %+v, selectedQIDs count: %d\n", ws.typeCounts, len(ws.selectedQIDs))
 	for qType, required := range ws.typeCounts {
 		if required <= 0 {
 			continue
@@ -64,10 +83,13 @@ func checkIfQuestionsSelectedFull(ws *AdminExamCreateState) bool {
 				count++
 			}
 		}
+		fmt.Printf("[DEBUG checkIfQuestionsSelectedFull] Type: %s, required: %d, actual selected count: %d\n", qType, required, count)
 		if count < required {
+			fmt.Printf("[DEBUG checkIfQuestionsSelectedFull] -> NOT FULL for type %s (count %d < required %d)\n", qType, count, required)
 			return false
 		}
 	}
+	fmt.Println("[DEBUG checkIfQuestionsSelectedFull] -> ALL FULL, returning true")
 	return true
 }
 
@@ -137,22 +159,24 @@ type AdminExamCreateState struct {
 	// 考试设置确认状态
 	examParamsConfirmed bool // 考试设置是否已确认
 	// UI 引用（用于动态更新）
-	qListVBox         *fyne.Container              // 题目列表容器
-	qListScroll       *container.Scroll            // 题目列表滚动容器
-	titleLabel        *widget.Label                // 选择题目页标题标签（用于动态更新）
-	nameEntry         *widget.Entry                // 考试名称输入框
-	durationEntry     *widget.Entry                // 考试时长输入框
-	startTimeLbl      *widget.Label                // 开始时间显示标签
-	endTimeLbl        *widget.Label                // 结束时间显示标签
-	typeEntries       map[string]*widget.Entry     // 每种题型数量输入框
-	typeScoreEntries  map[string]*widget.Entry     // 每种题型分值输入框
-	userVBox          *fyne.Container              // 用户列表容器
-	userScroll        *container.Scroll            // 用户列表滚动容器
-	createBtn         *customElements.CustomButton // 创建推送按钮
-	examParamsContent *fyne.Container              // 考试设置页面内容容器
-	examParamsSummary *fyne.Container              // 考试设置统计信息容器
-	wizard            *container.AppTabs           // 向导 TabContainer 引用
-	templateRefreshFunc func() // 模板列表刷新函数
+	qListVBox           *fyne.Container              // 题目列表容器
+	qListScroll         *container.Scroll            // 题目列表滚动容器
+	titleLabel          *widget.Label                // 选择题目页标题标签（用于动态更新）
+	nameEntry           *widget.Entry                // 考试名称输入框
+	durationEntry       *widget.Entry                // 考试时长输入框
+	startTimeLbl        *widget.Label                // 开始时间显示标签
+	endTimeLbl          *widget.Label                // 结束时间显示标签
+	typeEntries         map[string]*widget.Entry     // 每种题型数量输入框
+	typeScoreEntries    map[string]*widget.Entry     // 每种题型分值输入框
+	userVBox            *fyne.Container              // 用户列表容器
+	userScroll          *container.Scroll            // 用户列表滚动容器
+	createBtn           *customElements.CustomButton // 创建推送按钮
+	examParamsContent   *fyne.Container              // 考试设置页面内容容器
+	examParamsSummary   *fyne.Container              // 考试设置统计信息容器
+	wizard              *container.AppTabs           // 向导 TabContainer 引用
+	templateRefreshFunc func()                       // 模板列表刷新函数
+	userPageRefreshFunc func()                       // 目标用户页刷新函数
+	confirmPageRefreshFunc func()                    // 确认推送页刷新函数
 }
 
 // ShowAdminExamCreate 打开管理员考试创建向导。
@@ -193,31 +217,22 @@ func ShowAdminExamCreate(w fyne.Window, state *core.AppState, backToHome func())
 		container.NewTabItem(core.AdminTabConfirm, wizardPages[4]),
 		container.NewTabItem(core.AdminTabTemplates, wizardPages[5]),
 	)
-	ws.wizard.SetTabLocation(container.TabLocationLeading)
+	// 移除 OnSelected 内部对 ws.wizard.Refresh() 以及动态赋值 Content 的复杂回调逻辑，避免在初始化渲染时触发 applyTheme/scroller 内部的 nil pointer dereference 异常。
 	ws.wizard.OnSelected = func(item *container.TabItem) {
 		switch item.Text {
-		case core.AdminTabSource:
-			ws.wizard.Items[0].Content = buildSourcePage(ws, w, state)
-			ws.wizard.Refresh()
-		case core.AdminTabExamParams:
-			ws.wizard.Items[1].Content = buildExamParamsPage(ws, w, state)
-			ws.wizard.Refresh()
-		case core.AdminTabSelect:
-			ws.wizard.Items[2].Content = buildQuestionSelectPage(ws)
-			ws.wizard.Refresh()
-		case core.AdminTabUser:
-			ws.wizard.Items[3].Content = buildUserSelectPage(ws, state)
-			ws.wizard.Refresh()
-		case core.AdminTabConfirm:
-			ws.wizard.Items[4].Content = buildConfirmPage(ws, w, state)
-			ws.wizard.Refresh()
 		case core.AdminTabTemplates:
-			// 只有在点击"考试列表"标签时才加载数据
-			ws.wizard.Items[5].Content = buildTemplateListPage(ws, w, state)
-			ws.wizard.Refresh()
-			// 触发模板列表数据加载
 			if ws.templateRefreshFunc != nil {
 				ws.templateRefreshFunc()
+			}
+		case core.AdminTabUser:
+			// 当切换到目标用户页时，检查题目是否已选择完整，并刷新目标用户页
+			if ws.userPageRefreshFunc != nil {
+				ws.userPageRefreshFunc()
+			}
+		case core.AdminTabConfirm:
+			// 当切换到确认推送页时，刷新确认推送页状态
+			if ws.confirmPageRefreshFunc != nil {
+				ws.confirmPageRefreshFunc()
 			}
 		}
 	}
@@ -246,12 +261,11 @@ func ShowAdminExamCreate(w fyne.Window, state *core.AppState, backToHome func())
 
 	topBar := container.NewBorder(nil, nil, backBtn, nil, titleCenter)
 	pageBg := canvas.NewRectangle(core.HexColor(core.PageBgColor))
-	scrollWizard := container.NewVScroll(ws.wizard)
-	scrollWizard.SetMinSize(fyne.NewSize(0, core.AdminExamWizardHeight))
-
-	mainLayout := container.NewBorder(topBar, nil, nil, nil, scrollWizard)
+	// 直接将 ws.wizard 放入 Border 布局，而不是用 VScroll 嵌套 AppTabs，避免 AppTabs 的 scroller 在未完全初始化时产生 nil pointer dereference
+	mainLayout := container.NewBorder(topBar, nil, nil, nil, ws.wizard)
 	wRootLayout := container.NewStack(pageBg, mainLayout)
 	w.SetContent(wRootLayout)
+	ws.wizard.SetTabLocation(container.TabLocationLeading)
 }
 
 // ==================== Step 1: 题库来源选择 ====================
@@ -678,11 +692,15 @@ func buildQuestionSelectPage(ws *AdminExamCreateState) fyne.CanvasObject {
 		cb := widget.NewCheck(t, func(checked bool) {
 			ws.questionFilterTypes[t] = checked
 			refreshQuestionList(ws)
+			// 刷新目标用户页状态
+			if ws.userPageRefreshFunc != nil {
+				ws.userPageRefreshFunc()
+			}
 		})
 		cb.SetChecked(ws.questionFilterTypes[t])
 		checkObjs = append(checkObjs, cb)
 	}
-	filterBox := container.NewHBox(checkObjs...)
+	filterBox := container.NewGridWrap(fyne.NewSize(130, core.LayoutSpacingH20), checkObjs...)
 
 	// 随机填满按钮（标识符：randomFillBtn，名称："🎲 随机填满"）：一键随机填满各题型所需数量。
 	randomFillBtn := customElements.CreateButton(
@@ -699,6 +717,10 @@ func buildQuestionSelectPage(ws *AdminExamCreateState) fyne.CanvasObject {
 			randomFillQuestions(ws)
 			refreshQuestionList(ws)
 			updateQuestionSelectTitle(ws)
+			// 刷新目标用户页状态
+			if ws.userPageRefreshFunc != nil {
+				ws.userPageRefreshFunc()
+			}
 		},
 	)
 
@@ -813,6 +835,10 @@ func renderLocalQuestions(ws *AdminExamCreateState) {
 		section := buildGroupedSection(qType, questions, ws.selectedQIDs, ws, func() {
 			refreshQuestionList(ws)
 			updateQuestionSelectTitle(ws)
+			// 刷新目标用户页状态
+			if ws.userPageRefreshFunc != nil {
+				ws.userPageRefreshFunc()
+			}
 		})
 		ws.qListVBox.Add(section)
 		ws.qListVBox.Add(container.NewGridWrap(fyne.NewSize(1, core.AdminListSpacingH8)))
@@ -864,6 +890,10 @@ func renderServerQuestions(ws *AdminExamCreateState) {
 		section := buildGroupedSection(qType, questions, ws.selectedQIDs, ws, func() {
 			refreshQuestionList(ws)
 			updateQuestionSelectTitle(ws)
+			// 刷新目标用户页状态
+			if ws.userPageRefreshFunc != nil {
+				ws.userPageRefreshFunc()
+			}
 		})
 		ws.qListVBox.Add(section)
 		ws.qListVBox.Add(container.NewGridWrap(fyne.NewSize(1, core.ListWrapHeight)))
@@ -1504,12 +1534,6 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 // 返回值：
 //   - fyne.CanvasObject：目标用户选择页面的UI容器对象。
 func buildUserSelectPage(ws *AdminExamCreateState, state *core.AppState) fyne.CanvasObject {
-	if !checkIfQuestionsSelectedFull(ws) {
-		return container.NewPadded(container.NewCenter(
-			canvas.NewText(core.AdminNoQuestionsSelectedMsg, core.HexColor(core.TextMutedColor)),
-		))
-	}
-
 	ws.userVBox = container.NewVBox()
 	ws.userScroll = container.NewVScroll(ws.userVBox)
 	ws.userScroll.SetMinSize(fyne.NewSize(0, core.AdminUserListHeight))
@@ -1522,146 +1546,183 @@ func buildUserSelectPage(ws *AdminExamCreateState, state *core.AppState) fyne.Ca
 		titleLabel.SetText(fmt.Sprintf("选择目标用户（已选 %d 人）", len(ws.selectedUsers)))
 	}
 
-	loadingText := canvas.NewText(core.AdminLoadingText, core.HexColor(core.TextHintColor))
-	loadingText.Alignment = fyne.TextAlignCenter
-	loadingText.TextSize = 14
-	ws.userVBox.Add(loadingText)
-
-	state.FetchAllUsers(func(success bool, users []network.UserItem, total int, msg string) {
+	// 定义刷新函数
+	refreshUserPage := func() {
+		isFull := checkIfQuestionsSelectedFull(ws)
+		fmt.Printf("[DEBUG refreshUserPage] checkIfQuestionsSelectedFull result: %v\n", isFull)
+		
+		// 清空用户列表容器
 		ws.userVBox.Objects = nil
-
-		if !success {
-			customElements.ShowCustomInformation(core.AdminErrorText, msg, nil)
-			return
-		}
-
-		var admins []network.UserItem
-		for _, user := range users {
-			if user.Role == "admin" || user.Role == "superadmin" {
-				admins = append(admins, user)
-			}
-		}
-
-		adminUsersMap := make(map[string][]network.UserItem)
-		var orphanUsers []network.UserItem
-
-		for _, user := range users {
-			if user.Role == "admin" || user.Role == "superadmin" {
-				continue
-			}
-			adminName := user.CreatedByUsername
-			if adminName == "" {
-				for _, admin := range admins {
-					if admin.UserID == user.CreatedBy {
-						adminName = admin.Username
-						break
-					}
-				}
-			}
-			if adminName != "" {
-				adminUsersMap[adminName] = append(adminUsersMap[adminName], user)
-			} else {
-				orphanUsers = append(orphanUsers, user)
-			}
-		}
-
-		if len(admins) == 0 && len(orphanUsers) == 0 {
-			noData := canvas.NewText(core.AdminNoUsersAvailableMsg, core.HexColor(core.TextMutedColor))
+		
+		if !isFull {
+			noData := canvas.NewText(core.AdminNoQuestionsSelectedMsg, core.HexColor(core.TextMutedColor))
 			noData.Alignment = fyne.TextAlignCenter
+			noData.TextSize = 14
 			ws.userVBox.Add(noData)
 			ws.userVBox.Refresh()
 			return
 		}
 
-		for _, admin := range admins {
-			adminItem := admin
-			subUsers := adminUsersMap[adminItem.Username]
+		loadingText := canvas.NewText(core.AdminLoadingText, core.HexColor(core.TextHintColor))
+		loadingText.Alignment = fyne.TextAlignCenter
+		loadingText.TextSize = 14
+		ws.userVBox.Add(loadingText)
 
-			var subUserCbs []*widget.Check
+		state.FetchAllUsers(func(success bool, users []network.UserItem, total int, msg string) {
+			ws.userVBox.Objects = nil
 
-			adminCb := widget.NewCheck(core.IconUserPrefix+adminItem.Username, nil)
-			adminCb.SetChecked(ws.selectedUsers[adminItem.UserID])
-
-			subUsersContainer := container.NewVBox()
-			subUsersContainer.Hide()
-
-			for _, user := range subUsers {
-				uItem := user
-				userCb := widget.NewCheck(core.IconSubUserPrefix+uItem.Username, func(checked bool) {
-					if checked {
-						ws.selectedUsers[uItem.UserID] = true
-					} else {
-						delete(ws.selectedUsers, uItem.UserID)
-					}
-					updateTitle()
-				})
-				userCb.SetChecked(ws.selectedUsers[uItem.UserID])
-				subUserCbs = append(subUserCbs, userCb)
-				subUsersContainer.Add(userCb)
+			if !success {
+				customElements.ShowCustomInformation(core.AdminErrorText, msg, nil)
+				ws.userVBox.Refresh()
+				return
 			}
 
-			adminCb.OnChanged = func(checked bool) {
-				if checked {
-					ws.selectedUsers[adminItem.UserID] = true
+			var admins []network.UserItem
+			for _, user := range users {
+				if user.Role == "admin" || user.Role == "superadmin" {
+					admins = append(admins, user)
+				}
+			}
+
+			adminUsersMap := make(map[string][]network.UserItem)
+			var orphanUsers []network.UserItem
+
+			for _, user := range users {
+				if user.Role == "admin" || user.Role == "superadmin" {
+					continue
+				}
+				adminName := user.CreatedByUsername
+				if adminName == "" {
+					for _, admin := range admins {
+						if admin.UserID == user.CreatedBy {
+							adminName = admin.Username
+							break
+						}
+					}
+				}
+				if adminName != "" {
+					adminUsersMap[adminName] = append(adminUsersMap[adminName], user)
 				} else {
-					delete(ws.selectedUsers, adminItem.UserID)
+					orphanUsers = append(orphanUsers, user)
 				}
-				for i, u := range subUsers {
-					subUserCbs[i].SetChecked(checked)
-					if checked {
-						ws.selectedUsers[u.UserID] = true
-					} else {
-						delete(ws.selectedUsers, u.UserID)
-					}
-				}
-				updateTitle()
 			}
 
-			var toggleBtn *widget.Button
-			if len(subUsers) > 0 {
-				toggleBtn = widget.NewButton(core.AdminToggleIconDown, nil)
-				toggleBtn.Importance = widget.LowImportance
-				toggleBtn.OnTapped = func() {
-					if subUsersContainer.Visible() {
-						subUsersContainer.Hide()
-						toggleBtn.SetText(core.AdminToggleIconDown)
-					} else {
-						subUsersContainer.Show()
-						toggleBtn.SetText(core.AdminToggleIconUp)
-					}
-				}
-			} else {
-				toggleBtn = widget.NewButton(core.BankManageToggleIconDisabled, nil)
-				toggleBtn.Disable()
+			if len(admins) == 0 && len(orphanUsers) == 0 {
+				noData := canvas.NewText(core.AdminNoUsersAvailableMsg, core.HexColor(core.TextMutedColor))
+				noData.Alignment = fyne.TextAlignCenter
+				ws.userVBox.Add(noData)
+				ws.userVBox.Refresh()
+				return
 			}
 
-			adminRow := container.NewBorder(nil, nil, adminCb, toggleBtn)
-			ws.userVBox.Add(container.NewVBox(adminRow, subUsersContainer))
-			ws.userVBox.Add(container.NewGridWrap(fyne.NewSize(1, 4)))
-		}
+			for _, admin := range admins {
+				adminItem := admin
+				subUsers := adminUsersMap[adminItem.Username]
 
-		if len(orphanUsers) > 0 {
-			orphanTitle := widget.NewLabel(core.AdminOtherUsersLabel)
-			orphanTitle.TextStyle = fyne.TextStyle{Bold: true}
-			ws.userVBox.Add(orphanTitle)
+				var subUserCbs []*widget.Check
 
-			for _, user := range orphanUsers {
-				uItem := user
-				userCb := widget.NewCheck(core.IconUserPrefix+uItem.Username, func(checked bool) {
+				adminCb := widget.NewCheck(core.IconUserPrefix+adminItem.Username, nil)
+				adminCb.SetChecked(ws.selectedUsers[adminItem.UserID])
+
+				subUsersContainer := container.NewVBox()
+				subUsersContainer.Hide()
+
+				for _, user := range subUsers {
+					uItem := user
+					userCb := widget.NewCheck(core.IconSubUserPrefix+uItem.Username, func(checked bool) {
+						if checked {
+							ws.selectedUsers[uItem.UserID] = true
+						} else {
+							delete(ws.selectedUsers, uItem.UserID)
+						}
+						updateTitle()
+						// 刷新确认推送页状态
+						if ws.confirmPageRefreshFunc != nil {
+							ws.confirmPageRefreshFunc()
+						}
+					})
+					userCb.SetChecked(ws.selectedUsers[uItem.UserID])
+					subUserCbs = append(subUserCbs, userCb)
+					subUsersContainer.Add(userCb)
+				}
+
+				adminCb.OnChanged = func(checked bool) {
 					if checked {
-						ws.selectedUsers[uItem.UserID] = true
+						ws.selectedUsers[adminItem.UserID] = true
 					} else {
-						delete(ws.selectedUsers, uItem.UserID)
+						delete(ws.selectedUsers, adminItem.UserID)
+					}
+					for i, u := range subUsers {
+						subUserCbs[i].SetChecked(checked)
+						if checked {
+							ws.selectedUsers[u.UserID] = true
+						} else {
+							delete(ws.selectedUsers, u.UserID)
+						}
 					}
 					updateTitle()
-				})
-				userCb.SetChecked(ws.selectedUsers[uItem.UserID])
-				ws.userVBox.Add(userCb)
-			}
-		}
+					// 刷新确认推送页状态
+					if ws.confirmPageRefreshFunc != nil {
+						ws.confirmPageRefreshFunc()
+					}
+				}
 
-		ws.userVBox.Refresh()
-	})
+				var toggleBtn *widget.Button
+				if len(subUsers) > 0 {
+					toggleBtn = widget.NewButton(core.AdminToggleIconDown, nil)
+					toggleBtn.Importance = widget.LowImportance
+					toggleBtn.OnTapped = func() {
+						if subUsersContainer.Visible() {
+							subUsersContainer.Hide()
+							toggleBtn.SetText(core.AdminToggleIconDown)
+						} else {
+							subUsersContainer.Show()
+							toggleBtn.SetText(core.AdminToggleIconUp)
+						}
+					}
+				} else {
+					toggleBtn = widget.NewButton(core.BankManageToggleIconDisabled, nil)
+					toggleBtn.Disable()
+				}
+
+				adminRow := container.NewBorder(nil, nil, adminCb, toggleBtn)
+				ws.userVBox.Add(container.NewVBox(adminRow, subUsersContainer))
+				ws.userVBox.Add(container.NewGridWrap(fyne.NewSize(1, 4)))
+			}
+
+			if len(orphanUsers) > 0 {
+				orphanTitle := widget.NewLabel(core.AdminOtherUsersLabel)
+				orphanTitle.TextStyle = fyne.TextStyle{Bold: true}
+				ws.userVBox.Add(orphanTitle)
+
+				for _, user := range orphanUsers {
+					uItem := user
+					userCb := widget.NewCheck(core.IconUserPrefix+uItem.Username, func(checked bool) {
+						if checked {
+							ws.selectedUsers[uItem.UserID] = true
+						} else {
+							delete(ws.selectedUsers, uItem.UserID)
+						}
+						updateTitle()
+						// 刷新确认推送页状态
+						if ws.confirmPageRefreshFunc != nil {
+							ws.confirmPageRefreshFunc()
+						}
+					})
+					userCb.SetChecked(ws.selectedUsers[uItem.UserID])
+					ws.userVBox.Add(userCb)
+				}
+			}
+
+			ws.userVBox.Refresh()
+		})
+	}
+
+	// 保存刷新函数到状态中
+	ws.userPageRefreshFunc = refreshUserPage
+
+	// 初始检查并加载用户列表
+	refreshUserPage()
 
 	content := container.NewVBox(titleLabel, ws.userScroll)
 	return container.NewPadded(content)
@@ -1682,6 +1743,18 @@ func buildUserSelectPage(ws *AdminExamCreateState, state *core.AppState) fyne.Ca
 // 返回值：
 //   - fyne.CanvasObject：确认推送页面的UI容器对象。
 func buildConfirmPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppState) fyne.CanvasObject {
+	// 定义刷新函数
+	refreshConfirmPage := func() {
+		if ws.wizard != nil && len(ws.wizard.Items) > 4 {
+			confirmPage := buildConfirmPage(ws, w, state)
+			ws.wizard.Items[4] = container.NewTabItem(ws.wizard.Items[4].Text, confirmPage)
+			ws.wizard.Refresh()
+		}
+	}
+
+	// 保存刷新函数到状态中
+	ws.confirmPageRefreshFunc = refreshConfirmPage
+
 	// 创建推送按钮（标识符：ws.createBtn，名称："创建推送"）：验证所有考试参数和选题状态，调用接口创建考试并推送到目标用户。
 	ws.createBtn = customElements.CreateButton(
 		core.AdminCreatePushBtnText,
@@ -1758,7 +1831,7 @@ func buildConfirmPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSt
 				}
 			} else {
 				for _, sq := range ws.serverQuestions {
-					sqID := fmt.Sprintf("%v", sq.ID)
+					sqID := formatQuestionID(sq.ID)
 					if ws.selectedQIDs[sqID] {
 						score := sq.Score
 						if score <= 0 {
@@ -1770,7 +1843,7 @@ func buildConfirmPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSt
 							}
 						}
 						questions = append(questions, network.ServerQuestion{
-							ID:         sq.ID,
+							ID:         sqID,
 							Type:       sq.Type,
 							Content:    sq.Content,
 							Options:    sq.Options,
@@ -1984,7 +2057,7 @@ func enforceTypeLimit(q *core.Question, selectedMap map[string]bool, ws *AdminEx
 		}
 	}
 	for _, sq := range ws.serverQuestions {
-		sqID := fmt.Sprintf("%d", sq.ID)
+		sqID := formatQuestionID(sq.ID)
 		if sq.Type == q.Type && selectedMap[sqID] {
 			currentCount++
 		}
@@ -2146,6 +2219,21 @@ func buildDetailedQuestionCard(q *core.Question, selected map[string]bool, ws *A
 	return container.NewStack(btnBg, cardLayout)
 }
 
+func formatQuestionID(id interface{}) string {
+	switch v := id.(type) {
+	case int:
+		return fmt.Sprintf("%d", v)
+	case int64:
+		return fmt.Sprintf("%d", v)
+	case float64:
+		return fmt.Sprintf("%d", int(v))
+	case string:
+		return v
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 // serverQuestionToLocal 将服务器题库题目转换为本地题目结构体。
 //
 // 功能说明：
@@ -2167,7 +2255,7 @@ func serverQuestionToLocal(q *network.ServerQuestion) *core.Question {
 	}
 
 	return &core.Question{
-		ID:         fmt.Sprintf("%d", q.ID),
+		ID:         formatQuestionID(q.ID),
 		Type:       q.Type,
 		Content:    q.Content,
 		Options:    opts,
@@ -2289,7 +2377,7 @@ func randomFillQuestions(ws *AdminExamCreateState) {
 //   - fyne.CanvasObject：考试模板列表页面的UI容器对象。
 func buildTemplateListPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppState) fyne.CanvasObject {
 	// Template list
-	var templateListVBox *fyne.Container
+	templateListVBox := container.NewVBox()
 	var refreshTemplateList func()
 
 	refreshTemplateList = func() {
@@ -2313,44 +2401,20 @@ func buildTemplateListPage(ws *AdminExamCreateState, w fyne.Window, state *core.
 				return
 			}
 
-			// Fetch details for each template and render cards preserving order
-			var mu sync.Mutex
-			fetchedCount := 0
-
-			type templateDetailData struct {
-				Item   network.TemplateItem
-				Detail *network.TemplateDetailItem
-			}
-			results := make([]templateDetailData, len(templates))
-
-			for i, tmpl := range templates {
-				go func(idx int, item network.TemplateItem) {
-					state.GetTemplateDetail(item.TemplateID, func(success bool, detail *network.TemplateDetailItem, detailMsg string) {
-						mu.Lock()
-						results[idx] = templateDetailData{Item: item, Detail: detail}
-						fetchedCount++
-						isDone := (fetchedCount == len(templates))
-						mu.Unlock()
-
-						if isDone {
-							var objects []fyne.CanvasObject
-							for _, res := range results {
-								resItem := res.Item // copy for closures
-								tmplCard := buildTemplateCardForPushExamWithDetail(&resItem, res.Detail, state, func() {
-									showDeleteTemplateConfirmForPushExam(w, state, &resItem, func() {
-										refreshTemplateList()
-									})
-								})
-								objects = append(objects, tmplCard, container.NewGridWrap(fyne.NewSize(1, 8)))
-							}
-
-							// Safely update the container objects on completion
-							templateListVBox.Objects = objects
-							fyne.Do(func() { templateListVBox.Refresh() })
-						}
+			// Render cards directly from templates since the list API now includes question_type_distribution
+			var objects []fyne.CanvasObject
+			for _, tmpl := range templates {
+				tmplCard := buildTemplateCardForPushExam(&tmpl, state, func() {
+					showDeleteTemplateConfirmForPushExam(w, state, &tmpl, func() {
+						refreshTemplateList()
 					})
-				}(i, tmpl)
+				})
+				objects = append(objects, tmplCard, container.NewGridWrap(fyne.NewSize(1, 8)))
 			}
+
+			// Safely update the container objects on completion
+			templateListVBox.Objects = objects
+			fyne.Do(func() { templateListVBox.Refresh() })
 		})
 	}
 
@@ -2368,17 +2432,16 @@ func buildTemplateListPage(ws *AdminExamCreateState, w fyne.Window, state *core.
 	return wRootLayout
 }
 
-// buildTemplateCardForPushExamWithDetail 为模板项创建一个卡片，只保留删除按钮。
+// buildTemplateCardForPushExam 为模板项创建一个卡片，只保留删除按钮。
 //
 // 参数:
 //   - tmpl: *network.TemplateItem 类型，表示模板项的基本信息。
-//   - detail: *network.TemplateDetailItem 类型，表示模板项的详细信息（各题型数量）。
 //   - state: *core.AppState 类型，表示全局应用状态。
 //   - onDelete: func() 类型，删除按钮的回调函数。
 //
 // 返回值:
 //   - fyne.CanvasObject 类型，返回构建好的模板卡片对象。
-func buildTemplateCardForPushExamWithDetail(tmpl *network.TemplateItem, detail *network.TemplateDetailItem, state *core.AppState, onDelete func()) fyne.CanvasObject {
+func buildTemplateCardForPushExam(tmpl *network.TemplateItem, state *core.AppState, onDelete func()) fyne.CanvasObject {
 	// Card background
 	bg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
 	bg.CornerRadius = core.TemplateCardCornerRadius
@@ -2404,41 +2467,51 @@ func buildTemplateCardForPushExamWithDetail(tmpl *network.TemplateItem, detail *
 	statusBadge.TextSize = core.TemplateStatusBadgeFontSize
 
 	// Info row
+	// Convert bank source to Chinese display
+	bankSourceText := "未知来源"
+	switch tmpl.BankSource {
+	case "local":
+		bankSourceText = "本地题库"
+	case "server":
+		bankSourceText = "服务器题库"
+	case "client":
+		bankSourceText = "客户端"
+	}
+
 	infoParts := []string{
 		fmt.Sprintf(core.TemplateInfoQuestionCountLabel, tmpl.QuestionCount),
 		fmt.Sprintf(core.TemplateInfoDurationLabel, tmpl.DurationMin),
-		fmt.Sprintf(core.TemplateInfoSourceLabel, tmpl.BankSource),
+		fmt.Sprintf(core.TemplateInfoSourceLabel, bankSourceText),
 	}
 
-	// Add per-type counts if available
-	if detail != nil {
-		var typeParts []string
-		if detail.SingleCount > 0 {
-			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeSingleChoice, detail.SingleCount))
-		}
-		if detail.MultiCount > 0 {
-			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeMultiChoice, detail.MultiCount))
-		}
-		if detail.JudgeCount > 0 {
-			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeJudge, detail.JudgeCount))
-		}
-		if detail.BlankCount > 0 {
-			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeFillIn, detail.BlankCount))
-		}
-		if detail.EssayCount > 0 {
-			typeParts = append(typeParts, fmt.Sprintf(core.TemplateTypeEssay, detail.EssayCount))
-		}
-		if len(typeParts) > 0 {
-			infoParts = append(infoParts, core.TemplateInfoTypePrefix+strings.Join(typeParts, "/"))
-		}
+	// Add per-type counts from QuestionTypeDistribution
+	if tmpl.QuestionTypeDistribution.SingleChoice > 0 {
+		infoParts = append(infoParts, fmt.Sprintf(core.TemplateTypeSingleChoice, tmpl.QuestionTypeDistribution.SingleChoice))
+	}
+	if tmpl.QuestionTypeDistribution.MultipleChoice > 0 {
+		infoParts = append(infoParts, fmt.Sprintf(core.TemplateTypeMultiChoice, tmpl.QuestionTypeDistribution.MultipleChoice))
+	}
+	if tmpl.QuestionTypeDistribution.TrueFalse > 0 {
+		infoParts = append(infoParts, fmt.Sprintf(core.TemplateTypeJudge, tmpl.QuestionTypeDistribution.TrueFalse))
+	}
+	if tmpl.QuestionTypeDistribution.FillBlank > 0 {
+		infoParts = append(infoParts, fmt.Sprintf(core.TemplateTypeFillIn, tmpl.QuestionTypeDistribution.FillBlank))
+	}
+	if tmpl.QuestionTypeDistribution.Essay > 0 {
+		infoParts = append(infoParts, fmt.Sprintf(core.TemplateTypeEssay, tmpl.QuestionTypeDistribution.Essay))
 	}
 
 	infoText := canvas.NewText(strings.Join(infoParts, "  |  "), core.HexColor(core.TextSecondaryColor))
 	infoText.TextSize = core.TemplateInfoTextFontSize
 
-	// Time info
-	timeText := canvas.NewText(fmt.Sprintf("开始: %s\n结束: %s", tmpl.StartTime, tmpl.EndTime), core.HexColor(core.TextMutedColor))
-	timeText.TextSize = core.TemplateTimeTextFontSize
+	// Time info - use VBox for proper line breaks
+	startTimeText := canvas.NewText(fmt.Sprintf("开始: %s", tmpl.StartTime), core.HexColor(core.TextMutedColor))
+	startTimeText.TextSize = core.TemplateTimeTextFontSize
+
+	endTimeText := canvas.NewText(fmt.Sprintf("结束: %s", tmpl.EndTime), core.HexColor(core.TextMutedColor))
+	endTimeText.TextSize = core.TemplateTimeTextFontSize
+
+	timeInfoContainer := container.NewVBox(startTimeText, endTimeText)
 
 	// 删除按钮：标识符为"deleteBtn"，功能为点击后弹出确认对话框以删除当前模板（调用 onDelete 回调）。
 	deleteBtn := customElements.CreateButton(
@@ -2465,7 +2538,7 @@ func buildTemplateCardForPushExamWithDetail(tmpl *network.TemplateItem, detail *
 		container.NewGridWrap(fyne.NewSize(1, 8)),
 		infoText,
 		container.NewGridWrap(fyne.NewSize(1, 5)),
-		timeText,
+		timeInfoContainer,
 		container.NewGridWrap(fyne.NewSize(1, 10)),
 		btnRow,
 	)

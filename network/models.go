@@ -248,8 +248,9 @@ type MyExamItem struct {
 	DurationMin   int      `json:"duration_min"`
 	StartTime     string   `json:"start_time"`
 	EndTime       string   `json:"end_time"`
-	Status        string   `json:"status"`          // "upcoming" / "active" / "in_progress" / "timeout" / "completed"
-	Score         *float64 `json:"score,omitempty"` // nil = not taken
+	Status        string   `json:"status"`            // "upcoming" / "active" / "in_progress" / "timeout" / "completed"
+	Score         *float64 `json:"score,omitempty"`   // nil = not taken
+	ExamSessionID string   `json:"exam_session_id,omitempty"` // session ID
 }
 
 // MyExamResp is the response from my exams list API.
@@ -468,16 +469,26 @@ type BatchImportQuestionsResp struct {
 
 // TemplateItem is the response from list templates API.
 type TemplateItem struct {
-	TemplateID    int    `json:"template_id"`
-	ExamName      string `json:"exam_name"`
-	DurationMin   int    `json:"duration_min"`
-	QuestionCount int    `json:"question_count"`
-	StartTime     string `json:"start_time"`
-	EndTime       string `json:"end_time"`
-	BankSource    string `json:"bank_source"` // "local" or "server"
-	CreatedBy     int    `json:"created_by"`
-	CreatedAt     string `json:"created_at"`
-	Status        string `json:"status"` // "draft" / "active" / "expired"
+	TemplateID    int                            `json:"template_id"`
+	ExamName      string                         `json:"exam_name"`
+	DurationMin   int                            `json:"duration_min"`
+	QuestionCount int                            `json:"question_count"`
+	StartTime     string                         `json:"start_time"`
+	EndTime       string                         `json:"end_time"`
+	BankSource    string                         `json:"bank_source"` // "local" or "server"
+	CreatedBy     int                            `json:"created_by"`
+	CreatedAt     string                         `json:"created_at"`
+	Status        string                         `json:"status"` // "draft" / "active" / "expired"
+	QuestionTypeDistribution QuestionTypeDistribution `json:"question_type_distribution"`
+}
+
+// QuestionTypeDistribution represents the per-type question counts in a template.
+type QuestionTypeDistribution struct {
+	SingleChoice int `json:"single_choice"` // 单选题数量
+	MultipleChoice int `json:"multiple_choice"` // 多选题数量
+	TrueFalse    int `json:"true_false"`    // 判断题数量
+	FillBlank    int `json:"fill_blank"`    // 填空题数量
+	Essay        int `json:"essay"`         // 问答题数量
 }
 
 // TemplateUpdateReq is the request body for updating a template.

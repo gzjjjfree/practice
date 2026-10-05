@@ -16,6 +16,7 @@ import (
 	"github.com/gzjjjfree/practice/core"
 	"github.com/gzjjjfree/practice/customElements"
 	"github.com/gzjjjfree/practice/network"
+	"github.com/gzjjjfree/practice/ui/pages/home/practiceRelated"
 )
 
 // ShowMyExams 渲染普通用户的"我的考试"页面。
@@ -92,6 +93,11 @@ func ShowMyExams(w fyne.Window, state *core.AppState, backToHome func()) {
 						// Refresh the list after returning from exam
 						ShowMyExams(w, state, backToHome)
 					})
+				}, func() {
+					// View exam detail
+					showExamDetailPage(w, state, &examItem, func() {
+						ShowMyExams(w, state, backToHome)
+					})
 				})
 				examListVBox.Add(examCard)
 				examListVBox.Add(container.NewGridWrap(fyne.NewSize(1, 8)))
@@ -127,7 +133,7 @@ func ShowMyExams(w fyne.Window, state *core.AppState, backToHome func()) {
 // 2. 构建考试名称、信息行（题目数、时长、开始/结束时间）、得分显示和状态徽章。
 // 3. 根据考试状态和是否已提交得分，动态生成不同的按钮组合（开始考试、继续考试、查看详情、未开放）。
 // 4. 返回一个包含所有元素的卡片 UI 组件。
-func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppState, onStart func(), onContinue func()) fyne.CanvasObject {
+func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppState, onStart func(), onContinue func(), onDetail func()) fyne.CanvasObject {
 	// 状态徽章颜色映射
 	statusColor := core.TextMutedColor
 	statusText := exam.Status
@@ -183,10 +189,10 @@ func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppSta
 	statusBadge.TextSize = core.FontSizeSmallest
 
 	// 按钮行：根据考试状态显示不同按钮
-	var buttonsRow *fyne.Container
+	var buttonsRow fyne.CanvasObject
 
 	if exam.Status == "active" && exam.Score == nil {
-		// 进行中的考试且未提交：显示"开始考试"和"查看详情"按钮
+		// 进行中的考试且未提交：显示"开始考试"按钮并居中
 		// startBtn: 开始考试按钮，标识符为 core.MyExamsStartExamBtnText。
 		// 功能与业务用途：点击该按钮可启动当前考试，进入全屏答题会话（通过调用 onStart 回调函数实现）。
 		startBtn := customElements.CreateButton(
@@ -203,27 +209,9 @@ func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppSta
 			onStart,
 		)
 
-		// viewDetailsBtn: 查看详情按钮，标识符为 core.MyExamsViewDetailsBtnText。
-		// 功能与业务用途：点击该按钮可弹出考试详情对话框，显示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
-		viewDetailsBtn := customElements.CreateButton(
-			core.MyExamsViewDetailsBtnText,
-			core.ActionBtnWidth, core.ActionBtnHeight,
-			core.HexColor(core.CardBgColor),
-			core.HexColor(core.BtnSecondaryBg),
-			core.HexColor(core.BtnSecondaryBg),
-			1.5, 18,
-			true, false,
-			fyne.TextAlignCenter, // 👈 居中对齐
-			fyne.TextWrapOff,     // 👈 不换行
-			fyne.TextTruncateOff, // 👈 不换行（截断）
-			func() {
-				showExamDetailDialog(w, state, exam)
-			},
-		)
-
-		buttonsRow = container.NewHBox(startBtn, viewDetailsBtn)
+		buttonsRow = container.NewCenter(startBtn)
 	} else if exam.Status == "in_progress" && exam.Score == nil {
-		// 考试中且未提交：显示"继续考试"和"查看详情"按钮
+		// 考试中且未提交：显示"继续考试"按钮并居中
 		// continueBtn: 继续考试按钮，标识符为 core.MyExamsContinueExamBtnText。
 		// 功能与业务用途：点击该按钮可继续当前考试，进入全屏答题会话（通过调用 onContinue 回调函数实现）。
 		continueBtn := customElements.CreateButton(
@@ -240,88 +228,23 @@ func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppSta
 			onContinue,
 		)
 
-		// viewDetailsBtn: 查看详情按钮，标识符为 core.MyExamsViewDetailsBtnText。
-		// 功能与业务用途：点击该按钮可弹出考试详情对话框，显示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
-		viewDetailsBtn := customElements.CreateButton(
-			core.MyExamsViewDetailsBtnText,
+		buttonsRow = container.NewCenter(continueBtn)
+	} else if exam.Score != nil || exam.Status == "completed" {
+		// 已交卷/有得分/已结束：显示"考试详情"按钮
+		detailBtn := customElements.CreateButton(
+			"考试详情",
 			core.ActionBtnWidth, core.ActionBtnHeight,
 			core.HexColor(core.CardBgColor),
-			core.HexColor(core.BtnSecondaryBg),
-			core.HexColor(core.BtnSecondaryBg),
+			core.HexColor(core.BtnPrimaryBg),
+			core.HexColor(core.BtnPrimaryBg),
 			1.5, 18,
 			true, false,
-			fyne.TextAlignCenter, // 👈 居中对齐
-			fyne.TextWrapOff,     // 👈 不换行
-			fyne.TextTruncateOff, // 👈 不换行（截断）
-			func() {
-				showExamDetailDialog(w, state, exam)
-			},
+			fyne.TextAlignCenter,
+			fyne.TextWrapOff,
+			fyne.TextTruncateOff,
+			onDetail,
 		)
-
-		buttonsRow = container.NewHBox(continueBtn, viewDetailsBtn)
-	} else if exam.Status == "active" && exam.Score != nil {
-		// 进行中的考试但已提交：只显示"查看详情"
-		// viewDetailsBtn: 查看详情按钮，标识符为 core.MyExamsViewDetailsBtnText。
-		// 功能与业务用途：点击该按钮可弹出考试详情对话框，显示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
-		viewDetailsBtn := customElements.CreateButton(
-			core.MyExamsViewDetailsBtnText,
-			core.ActionBtnWidth, core.ActionBtnHeight,
-			core.HexColor(core.CardBgColor),
-			core.HexColor(core.BtnSecondaryBg),
-			core.HexColor(core.BtnSecondaryBg),
-			1.5, 18,
-			true, false,
-			fyne.TextAlignCenter, // 👈 居中对齐
-			fyne.TextWrapOff,     // 👈 不换行
-			fyne.TextTruncateOff, // 👈 不换行（截断）
-			func() {
-				showExamDetailDialog(w, state, exam)
-			},
-		)
-
-		buttonsRow = container.NewCenter(viewDetailsBtn)
-	} else if exam.Status == "in_progress" && exam.Score != nil {
-		// 考试中但已提交：只显示"查看详情"
-		// viewDetailsBtn: 查看详情按钮，标识符为 core.MyExamsViewDetailsBtnText。
-		// 功能与业务用途：点击该按钮可弹出考试详情对话框，显示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
-		viewDetailsBtn := customElements.CreateButton(
-			core.MyExamsViewDetailsBtnText,
-			core.ActionBtnWidth, core.ActionBtnHeight,
-			core.HexColor(core.CardBgColor),
-			core.HexColor(core.BtnSecondaryBg),
-			core.HexColor(core.BtnSecondaryBg),
-			1.5, 18,
-			true, false,
-			fyne.TextAlignCenter, // 👈 居中对齐
-			fyne.TextWrapOff,     // 👈 不换行
-			fyne.TextTruncateOff, // 👈 不换行（截断）
-			func() {
-				showExamDetailDialog(w, state, exam)
-			},
-		)
-
-		buttonsRow = container.NewCenter(viewDetailsBtn)
-	} else if exam.Score != nil {
-		// 非进行中但有得分：显示"查看详情"
-		// viewDetailsBtn: 查看详情按钮，标识符为 core.MyExamsViewDetailsBtnText。
-		// 功能与业务用途：点击该按钮可弹出考试详情对话框，显示考试的详细信息（包括状态、题目数、时长、开始/结束时间、得分等）。
-		viewDetailsBtn := customElements.CreateButton(
-			core.MyExamsViewDetailsBtnText,
-			core.ActionBtnWidth, core.ActionBtnHeight,
-			core.HexColor(core.CardBgColor),
-			core.HexColor(core.BtnSecondaryBg),
-			core.HexColor(core.BtnSecondaryBg),
-			1.5, 18,
-			true, false,
-			fyne.TextAlignCenter, // 👈 居中对齐
-			fyne.TextWrapOff,     // 👈 不换行
-			fyne.TextTruncateOff, // 👈 不换行（截断）
-			func() {
-				showExamDetailDialog(w, state, exam)
-			},
-		)
-
-		buttonsRow = container.NewCenter(viewDetailsBtn)
+		buttonsRow = container.NewCenter(detailBtn)
 	} else {
 		// 未开放：显示灰色"未开放"按钮
 		// notOpenBtn: 未开放按钮，标识符为 core.MyExamsNotOpenBtnText。
@@ -347,15 +270,20 @@ func buildMyExamCard(w fyne.Window, exam *network.MyExamItem, state *core.AppSta
 	cardBg.StrokeColor = core.HexColor(core.BorderLightColor)
 	cardBg.StrokeWidth = core.StrokeThin
 
-	cardContent := container.NewVBox(
+	vboxItems := []fyne.CanvasObject{
 		container.NewBorder(nameText, nil, statusBadge, nil, nil),
 		container.NewGridWrap(fyne.NewSize(1, 8)),
 		infoText,
 		container.NewGridWrap(fyne.NewSize(1, 5)),
 		scoreText,
-		container.NewGridWrap(fyne.NewSize(1, 10)),
-		buttonsRow,
-	)
+	}
+	if buttonsRow != nil {
+		vboxItems = append(vboxItems,
+			container.NewGridWrap(fyne.NewSize(1, 10)),
+			buttonsRow,
+		)
+	}
+	cardContent := container.NewVBox(vboxItems...)
 
 	return container.NewStack(
 		cardBg,
@@ -383,7 +311,18 @@ func startExamInSession(w fyne.Window, state *core.AppState, exam *network.MyExa
 	// 启动考试会话
 	state.StartMyExam(exam.ExamID, func(success bool, sessionID string, questions []network.ServerQuestion, msg string) {
 		if !success {
-			customElements.ShowCustomInformation("错误", msg, w)
+			if strings.Contains(msg, "考试已超时") || strings.Contains(msg, "exam has timeout") || strings.Contains(msg, "timeout") {
+				exam.Status = "timeout"
+				for i := range state.MyExams {
+					if state.MyExams[i].ExamID == exam.ExamID {
+						state.MyExams[i].Status = "timeout"
+					}
+				}
+				customElements.ShowCustomInformation("错误", "考试已超时", w)
+				onBack()
+			} else {
+				customElements.ShowCustomInformation("错误", msg, w)
+			}
 			return
 		}
 
@@ -391,8 +330,17 @@ func startExamInSession(w fyne.Window, state *core.AppState, exam *network.MyExa
 		localQuestions := make([]core.Question, len(questions))
 		for i, q := range questions {
 			var convertedOpts []core.Option
-			for label, text := range q.Options {
-				convertedOpts = append(convertedOpts, core.Option{Label: label, Text: text})
+			for _, k := range []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"} {
+				if text, ok := q.Options[k]; ok && text != "" {
+					convertedOpts = append(convertedOpts, core.Option{Label: k, Text: text})
+				}
+			}
+			if len(convertedOpts) == 0 {
+				for label, text := range q.Options {
+					if text != "" {
+						convertedOpts = append(convertedOpts, core.Option{Label: label, Text: text})
+					}
+				}
 			}
 			var answers []string
 			for _, char := range q.Answer {
@@ -448,12 +396,9 @@ func startExamInSession(w fyne.Window, state *core.AppState, exam *network.MyExa
 // 6. 使用 TouchInterceptor 实现滑动切换题目的功能。
 func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 	// 题目状态跟踪变量
-	var currentQID string                         // 当前题目 ID
-	var isMemorizeRevealed bool                   // 是否已显示答案
-	var multiSelected = make(map[int]bool)        // 多选题已选索引
-	var singleWrongClicked = make(map[int]bool)   // 单选错误点击
-	var singleCorrectClicked = make(map[int]bool) // 单选正确点击
-	var multiSubmitted bool                       // 多选题是否已提交
+	var currentQID string                  // 当前题目 ID
+	var isMemorizeRevealed bool            // 是否已显示答案
+	var multiSelected = make(map[int]bool) // 多选题已选索引
 
 	var refreshExamUI func() // 刷新考试 UI 的闭包函数
 	refreshExamUI = func() {
@@ -483,7 +428,7 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 		// submitBtn: 交卷按钮，标识符为 core.MyExamsSubmitBtnText。
 		// 功能与业务用途：点击该按钮可弹出确认提交对话框，确认后调用 state.SubmitMyExamSubmission 提交考试答案，显示得分结果并返回考试列表页面（通过调用 onBack 回调函数实现）。
 		submitBtn := customElements.CreateButton(
-			core.MyExamsSubmitBtnText, core.NavButtonWidth, core.NavButtonHeight,
+			core.MyExamsSubmitBtnText, core.ModalCloseBtnWidth, core.NavButtonHeight,
 			core.HexColor(core.CardBgColor),
 			core.HexColor(core.ColorErrorBg),
 			core.HexColor(core.ColorErrorBorder),
@@ -531,20 +476,53 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 		metaLeft := canvas.NewText(metaLeftStr, core.HexColor(core.TextMutedColor))
 		metaLeft.TextSize = 13
 
+		answeredCount := 0
+		for _, qItem := range state.CurrentList {
+			if val, ok := state.ExamAnswers[qItem.ID]; ok && val != "" && val != "null" {
+				answeredCount++
+			}
+		}
+		summaryBtnText := fmt.Sprintf("答题卡 (%d/%d)", answeredCount, len(state.CurrentList))
+		summaryBtn := customElements.CreateButton(
+			summaryBtnText,
+			core.ModalCloseBtnWidth, core.NavButtonHeight,
+			core.HexColor(core.TextHintColor),
+			core.HexColor(core.SectionBgColor),
+			core.HexColor(core.SectionBgColor),
+			core.StrokeMedium, core.FontSizeDialogMsg,
+			false, false,
+			fyne.TextAlignCenter,
+			fyne.TextWrapOff,
+			fyne.TextTruncateOff,
+			func() {
+				ShowExamQuestionModal(w, state, refreshExamUI)
+			},
+		)
+
 		topNav := container.NewBorder(nil, nil, backBtn, submitBtn, titleCenter)
-		metaRow := container.NewBorder(nil, nil, metaLeft, nil, nil)
+		metaRow := container.NewBorder(nil, nil, metaLeft, summaryBtn, nil)
 
 		resetQuestionState := func() {
 			isMemorizeRevealed = false
 			multiSelected = make(map[int]bool)
-			singleWrongClicked = make(map[int]bool)
-			singleCorrectClicked = make(map[int]bool)
-			multiSubmitted = false
 		}
 
 		if q.ID != currentQID {
 			currentQID = q.ID
 			resetQuestionState()
+			if ans, ok := state.ExamAnswers[q.ID]; ok && ans != "" && ans != "null" {
+				if q.Type == "多选题" {
+					for _, char := range ans {
+						charStr := string(char)
+						for idx, opt := range q.Options {
+							if opt.Label == charStr {
+								multiSelected[idx] = true
+								break
+							}
+						}
+					}
+				}
+			}
 		}
 
 		stemText := fmt.Sprintf("%d. %s", state.Index+1, q.Content)
@@ -604,8 +582,6 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 				optionsBox.Add(cardB)
 			}
 		} else {
-			hasSingleAnswered := len(singleCorrectClicked) > 0 || len(singleWrongClicked) > 0
-
 			for i, opt := range q.Options {
 				optIndex := i
 				optStr := opt.Text
@@ -613,7 +589,7 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 					continue
 				}
 
-				optLetter := string(rune('A' + optIndex))
+				optLetter := opt.Label
 				optPrefix := optLetter + ". "
 
 				prefixLbl := widget.NewLabel(optPrefix)
@@ -627,65 +603,26 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 				rightIconText := canvas.NewText("", core.HexColor(core.CardBgColor))
 				rightIconText.TextSize = core.RightIconTextFontSize
 				rightIconText.TextStyle = fyne.TextStyle{Bold: true}
+				rightIconText.Color = core.HexColor(core.CardBgColor)
 
 				bgColorStr := core.OptionDefaultBg
 				strokeColorStr := core.BorderLightColor
-				iconColorStr := core.CardBgColor
-				greenColor := core.ColorCorrectBorder
-
-				isCorrectAnswer := false
-				for _, correctLetter := range q.Answers {
-					if correctLetter == optLetter {
-						isCorrectAnswer = true
-						break
-					}
-				}
 
 				if q.Type == "多选题" {
-					if multiSubmitted {
-						if isCorrectAnswer {
-							bgColorStr = core.ColorCorrectBg
-							if multiSelected[optIndex] {
-								rightIconText.Text = "✓"
-								iconColorStr = greenColor
-								strokeColorStr = greenColor
-							} else {
-								rightIconText.Text = "✕"
-								iconColorStr = core.ColorWrongBorder
-								strokeColorStr = core.ColorWrongBorder
-							}
-						} else {
-							if multiSelected[optIndex] {
-								bgColorStr = core.ColorWrongBg
-								rightIconText.Text = "✕"
-								iconColorStr = core.ColorWrongBorder
-								strokeColorStr = core.ColorWrongBorder
-							}
-						}
-					} else if multiSelected[optIndex] {
+					if multiSelected[optIndex] {
 						bgColorStr = core.ColorSelectedBg
 					}
 				} else {
-					if singleWrongClicked[optIndex] {
-						bgColorStr = core.ColorWrongBg
-						rightIconText.Text = "✕"
-						iconColorStr = core.ColorWrongBorder
-						strokeColorStr = core.ColorWrongBorder
-					}
-					if singleCorrectClicked[optIndex] {
-						bgColorStr = core.ColorCorrectBg
-						rightIconText.Text = "✓"
-						iconColorStr = greenColor
-						strokeColorStr = greenColor
+					if state.ExamAnswers[q.ID] == optLetter {
+						bgColorStr = core.ColorSelectedBg
 					}
 				}
 
-				rightIconText.Color = core.HexColor(iconColorStr)
 				fixedIconBox := container.NewGridWrap(fyne.NewSize(core.IconFixedBoxSize, core.IconFixedBoxSize), container.NewCenter(rightIconText))
 				_ = container.NewBorder(nil, nil, prefixLbl, fixedIconBox, contentLbl)
 
 				// optCard: 选项按钮，标识符为选项文本内容 optStr。
-				// 功能与业务用途：针对单选题和多选题，点击该按钮可选择或取消选择对应选项。对于多选题，支持多次切换选择状态；对于单选题，选择后不可更改，并立即显示正确/错误反馈及正确答案提示。
+				// 功能与业务用途：针对单选题和多选题，点击该按钮可选择或取消选择对应选项。对于多选题，支持多次切换选择状态；对于单选题，选择后可更改。
 				optCard := customElements.CreateButton(
 					optStr, 0, 0,
 					core.HexColor(core.TextBodyColor),
@@ -697,32 +634,23 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 					fyne.TextWrapOff,     // 👈 不换行
 					fyne.TextTruncateOff, // 👈 不换行（截断）
 					func() {
-
-						if q.Type == "多选题" && multiSubmitted {
-							return
-						}
-						if q.Type != "多选题" && hasSingleAnswered {
-							return
-						}
-
 						if q.Type == "多选题" {
 							multiSelected[optIndex] = !multiSelected[optIndex]
+							var sel []string
+							for idx, o := range q.Options {
+								if multiSelected[idx] {
+									sel = append(sel, o.Label)
+								}
+							}
+							if len(sel) > 0 {
+								state.ExamAnswers[q.ID] = strings.Join(sel, "")
+							} else {
+								delete(state.ExamAnswers, q.ID)
+							}
 							refreshExamUI()
 						} else {
 							state.ExamAnswers[q.ID] = optLetter
-							if isCorrectAnswer {
-								singleCorrectClicked[optIndex] = true
-								refreshExamUI()
-							} else {
-								singleWrongClicked[optIndex] = true
-								for _, correctLetter := range q.Answers {
-									if len(correctLetter) == 1 {
-										cIdx := int(correctLetter[0] - 'A')
-										singleCorrectClicked[cIdx] = true
-									}
-								}
-								refreshExamUI()
-							}
+							refreshExamUI()
 						}
 					})
 
@@ -820,7 +748,19 @@ func renderMyExamPage(w fyne.Window, state *core.AppState, onBack func()) {
 //   - exam: *network.MyExamItem 类型，表示考试项的数据结构，包含考试 ID、名称、状态等信息。
 func showExamDetailDialog(w fyne.Window, state *core.AppState, exam *network.MyExamItem) {
 	// Get exam result
-	state.GetExamResult(fmt.Sprintf("%d", exam.ExamID), func(success bool, result *network.ExamDetailResult, msg string) {
+	sessionID := exam.ExamSessionID
+	if sessionID == "" {
+		sessionID = state.ExamSessionID
+	}
+	if sessionID == "" {
+		// 如果没有 exam_session_id，则无法获取考试详情
+		// 客户端在调用获取考试详情/事后回看接口 (GET /api/v1/my-exams/result/{session_id}) 时，
+		// URL 路径中传递的应当是调用 StartExam 返回的 exam_session_id 字符串（例如 "2-1-1708512345678901234"），
+		// 而非考试本身的数字 exam_id。
+		customElements.ShowCustomInformation(core.BankManageErrorMsgType, "考试会话ID不存在，无法获取考试详情", w)
+		return
+	}
+	state.GetExamResult(sessionID, func(success bool, result *network.ExamDetailResult, msg string) {
 		if !success {
 			customElements.ShowCustomInformation(core.BankManageErrorMsgType, msg, w)
 			return
@@ -905,4 +845,210 @@ func showExamDetailDialog(w fyne.Window, state *core.AppState, exam *network.MyE
 func pageBgForExam() *canvas.Rectangle {
 	bg := canvas.NewRectangle(core.HexColor(core.PageBgColor))
 	return bg
+}
+
+// ShowExamQuestionModal 显示考试题目导航弹窗，以网格形式展示所有题目并标记答题状态（已答/未答/当前）。
+// 题目状态用颜色编码：蓝色=当前题目，绿色=已答题目，灰色/默认=未作答。
+// 点击题目可跳转到对应题号。
+func ShowExamQuestionModal(w fyne.Window, state *core.AppState, onNavigate func()) {
+	grid := container.NewGridWrap(fyne.NewSize(core.ModalGridItemSize, core.ModalGridItemSize))
+
+	var modal *widget.PopUp
+
+	for i := 0; i < len(state.CurrentList); i++ {
+		idx := i
+		q := state.CurrentList[idx]
+
+		// 1. 计算状态
+		isCurrent := (idx == state.Index)
+		ansVal, hasAns := state.ExamAnswers[q.ID]
+		isAnswered := hasAns && ansVal != "" && ansVal != "null"
+
+		// 2. 根据状态决定动态颜色（两种答题状态：已答 vs 未答，以及当前题目高亮）
+		bgColor := core.HexColor(core.CardBgColor)
+		borderColor := core.HexColor(core.BorderMediumColor)
+
+		if isCurrent {
+			bgColor = core.HexColor(core.ColorSelectedBg)
+			borderColor = core.HexColor(core.ColorSelectedBorder)
+		} else if isAnswered {
+			bgColor = core.HexColor(core.ColorCorrectBg)
+			borderColor = core.HexColor(core.ColorCorrectBorder)
+		}
+
+		// 3. 计算题型简称
+		shortType := ""
+		switch q.Type {
+		case "单选题":
+			shortType = "单"
+		case "多选题":
+			shortType = "多"
+		case "判断题":
+			shortType = "判"
+		case "填空题":
+			shortType = "填"
+		case "问答题", "简答题", "案例分析":
+			shortType = "答"
+		default:
+			runes := []rune(q.Type)
+			if len(runes) > 0 {
+				shortType = string(runes[0])
+			}
+		}
+
+		// 4. 创建底层按钮
+		box := customElements.CreateButton(
+			"",
+			core.ModalGridItemSize, core.ModalGridItemSize,
+			core.HexColor(core.TextBodyColor),
+			bgColor,
+			borderColor,
+			core.StrokeMedium, core.FontSizeSubtitle,
+			false, false,
+			fyne.TextAlignCenter,
+			fyne.TextWrapOff,
+			fyne.TextTruncateOff,
+			func() {
+				state.Index = idx
+				onNavigate()
+				if modal != nil {
+					modal.Hide()
+				}
+			},
+		)
+
+		// 5. 用绝对布局在按钮正上方绘制数字和题型
+		contentBox := container.NewWithoutLayout()
+		contentBox.Resize(fyne.NewSize(core.ModalGridItemSize, core.ModalGridItemSize))
+
+		numText := canvas.NewText(fmt.Sprintf("%d", idx+1), core.HexColor(core.TextBodyColor))
+		numText.TextSize = 14
+		numText.TextStyle = fyne.TextStyle{Bold: true}
+		numText.Resize(numText.MinSize())
+
+		typeText := canvas.NewText(shortType, core.HexColor(core.TextBodyColor))
+		typeText.TextSize = 12
+		typeText.Resize(typeText.MinSize())
+
+		totalH := numText.MinSize().Height + typeText.MinSize().Height + 1
+		startY := (core.ModalGridItemSize - totalH) / 2
+
+		numX := (core.ModalGridItemSize - numText.MinSize().Width) / 2
+		numText.Move(fyne.NewPos(numX, startY))
+
+		typeX := (core.ModalGridItemSize - typeText.MinSize().Width) / 2
+		typeText.Move(fyne.NewPos(typeX, startY+numText.MinSize().Height+1))
+
+		contentBox.Add(numText)
+		contentBox.Add(typeText)
+
+		cellContainer := container.NewStack(box, contentBox)
+		grid.Add(cellContainer)
+	}
+
+	scroll := container.NewScroll(grid)
+	scroll.SetMinSize(fyne.NewSize(320, 360))
+
+	titleText := canvas.NewText("答题卡 (题目列表)", core.HexColor(core.TextPrimaryColor))
+	titleText.TextSize = core.FontSizeDialogMsg
+	titleText.TextStyle = fyne.TextStyle{Bold: true}
+	titleContainer := container.NewCenter(titleText)
+
+	btnClose := customElements.CreateButton(
+		core.PracticeModalCloseBtnText,
+		core.ModalCloseBtnWidth, core.ModalCloseBtnHeight,
+		core.HexColor(core.CardBgColor),
+		core.HexColor(core.BtnPrimaryBg),
+		core.HexColor(core.BtnPrimaryBg),
+		core.StrokeMedium, core.FontSizeSubtitle,
+		true, false,
+		fyne.TextAlignCenter,
+		fyne.TextWrapOff,
+		fyne.TextTruncateOff,
+		func() {
+			if modal != nil {
+				modal.Hide()
+			}
+		},
+	)
+
+	modalContent := container.NewBorder(
+		container.NewPadded(titleContainer),
+		container.NewPadded(container.NewCenter(btnClose)),
+		nil, nil,
+		scroll,
+	)
+
+	modalBg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
+	modalBg.CornerRadius = core.LargeCardCorner
+	modalBg.StrokeWidth = core.StrokeThin
+	modalBg.StrokeColor = core.HexColor(core.BorderLightColor)
+
+	styledModal := container.NewStack(modalBg, container.NewPadded(modalContent))
+
+	modal = widget.NewModalPopUp(styledModal, w.Canvas())
+	modal.Show()
+}
+
+// showExamDetailPage 获取考试结果详情，并复用 ShowPractice 渲染考试详情页面（显示用户选择和正确结果，类同顺序练习）。
+func showExamDetailPage(w fyne.Window, state *core.AppState, exam *network.MyExamItem, onBack func()) {
+	sessionID := exam.ExamSessionID
+	if sessionID == "" {
+		sessionID = state.ExamSessionID
+	}
+	if sessionID == "" {
+		// 如果没有 exam_session_id，则无法获取考试详情
+		// 客户端在调用获取考试详情/事后回看接口 (GET /api/v1/my-exams/result/{session_id}) 时，
+		// URL 路径中传递的应当是调用 StartExam 返回的 exam_session_id 字符串（例如 "2-1-1708512345678901234"），
+		// 而非考试本身的数字 exam_id。
+		customElements.ShowCustomInformation(core.BankManageErrorMsgType, "考试会话ID不存在，无法获取考试详情", w)
+		return
+	}
+	state.GetExamResult(sessionID, func(success bool, result *network.ExamDetailResult, msg string) {
+		if !success {
+			customElements.ShowCustomInformation(core.BankManageErrorMsgType, msg, w)
+			return
+		}
+		localQuestions := make([]core.Question, len(result.Items))
+		state.PracticeRecords = make(map[string]string)
+		for i, item := range result.Items {
+			var convertedOpts []core.Option
+			for _, k := range []string{"A", "B", "C", "D", "E", "F", "G", "H", "I"} {
+				if text, ok := item.Options[k]; ok && text != "" {
+					convertedOpts = append(convertedOpts, core.Option{Label: k, Text: text})
+				}
+			}
+			if len(convertedOpts) == 0 {
+				for label, text := range item.Options {
+					convertedOpts = append(convertedOpts, core.Option{Label: label, Text: text})
+				}
+			}
+			var answers []string
+			cleanAns := strings.NewReplacer("、", "", ",", "", " ", "").Replace(item.CorrectAnswer)
+			for _, char := range cleanAns {
+				answers = append(answers, string(char))
+			}
+			if len(answers) == 0 && item.CorrectAnswer != "" {
+				answers = append(answers, item.CorrectAnswer)
+			}
+			localQuestions[i] = core.Question{
+				ID:      item.QuestionID,
+				Type:    item.QuestionType,
+				Content: item.Content,
+				Options: convertedOpts,
+				Answers: answers,
+				Score:   1.0,
+			}
+			if item.UserAnswer != "" && item.UserAnswer != "null" {
+				state.PracticeRecords[item.QuestionID] = item.UserAnswer
+			}
+		}
+		state.CurrentList = localQuestions
+		state.Index = 0
+		state.Title = exam.BankName + " - 考试详情"
+		state.CurrentFileName = exam.BankName
+		practiceRelated.ShowPractice(w, state, func(win fyne.Window, s *core.AppState) {
+			onBack()
+		})
+	})
 }

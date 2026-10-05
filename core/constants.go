@@ -221,8 +221,8 @@ const (
 	ConfirmParamsBtnFontSize    = float32(14)  // 考试参数确认按钮字体大小
 	CreatePushBtnStrokeWidth    = float32(1.5) // 创建并推送按钮边框宽度
 	CreatePushBtnFontSize       = float32(18)  // 创建并推送按钮字体大小
-	BtnLargeWidth               = float32(200) // 大型操作按钮宽度
-	BtnLargeHeight              = float32(50)  // 大型操作按钮高度
+	BtnLargeWidth               = float32(120) // 大型操作按钮宽度
+	BtnLargeHeight              = float32(40)  // 大型操作按钮高度
 	BtnMediumWideWidth          = float32(180) // 中等宽按钮宽度
 	BtnMediumWideHeight         = float32(35)  // 中等宽按钮高度
 	BtnSmallWidth               = float32(45)  // 小型辅助按钮宽度
@@ -532,7 +532,7 @@ const TemplateStatusExpiredColor = ColorWrongBorder // 已过期状态颜色
 const MyExamsScrollMinHeight = float32(400) // 我的考试列表滚动区域最小高度
 
 // --- 按钮文本 ---
-const MyExamsSubmitBtnText = "← 交卷" // 交卷按钮文本
+const MyExamsSubmitBtnText = "交卷" // 交卷按钮文本
 
 // --- 结果格式 ---
 const MyExamsScoreResultFormat = "得分: %.1f / 100\n正确: %d / %d" // 考试结果得分格式

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gzjjjfree/practice/parser"
@@ -100,15 +101,31 @@ func (c *APIClient) doRequest(method, endpoint string, reqBody, respBody interfa
 		return nil
 	}
 
-	// For non-2xx status codes, try to parse JSON response body for {code, msg}.
+	// For non-2xx status codes, try to parse JSON response body for {code, msg, error}.
 	bodyStr := string(bodyBytes)
 	fmt.Printf("[API_DOREQUEST] non-2xx status=%d, body=%q\n", resp.StatusCode, bodyStr)
 
 	var apiErr struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
+		Code  int    `json:"code"`
+		Msg   string `json:"msg"`
+		Error string `json:"error"`
 	}
-	if err := json.Unmarshal(bodyBytes, &apiErr); err == nil && apiErr.Msg != "" {
+	if err := json.Unmarshal(bodyBytes, &apiErr); err == nil {
+		// 根据 error 字段生成具体的错误信息
+		errMsg := apiErr.Msg
+		if apiErr.Error != "" {
+			switch {
+			case apiErr.Error == "user not found":
+				errMsg = "账号不存在"
+			case apiErr.Error == "wrong password":
+				errMsg = "密码错误"
+			case strings.Contains(apiErr.Error, "exam has timeout"):
+				errMsg = "考试已超时"
+			default:
+				errMsg = apiErr.Error
+			}
+		}
+		
 		// Also try to parse into respBody if it's a wrapped response
 		if respBody != nil {
 			var wrappedResp struct {
@@ -118,13 +135,13 @@ func (c *APIClient) doRequest(method, endpoint string, reqBody, respBody interfa
 			}
 			if err2 := json.Unmarshal(bodyBytes, &wrappedResp); err2 == nil {
 				wrappedResp.Code = apiErr.Code
-				wrappedResp.Msg = apiErr.Msg
+				wrappedResp.Msg = errMsg
 				// Use jsonx to deep merge or re-marshal
 				dataBytes, _ := json.Marshal(wrappedResp)
 				json.Unmarshal(dataBytes, respBody)
 			}
 		}
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiErr.Msg)
+		return fmt.Errorf("%s", errMsg)
 	}
 	return fmt.Errorf("HTTP %d", resp.StatusCode)
 }
@@ -486,9 +503,28 @@ func (c *APIClient) SubmitMyExam(examSessionID string, answers map[string]string
 	}
 	var resp SubmitMyExamResp
 
+	fmt.Printf("[API_SUBMIT_MY_EXAM] ========== 提交我的考试 ==========\n")
+	fmt.Printf("[API_SUBMIT_MY_EXAM] REQUEST: POST /my-exams/submit\n")
+	if reqBytes, err := json.MarshalIndent(req, "", "  "); err == nil {
+		fmt.Printf("[API_SUBMIT_MY_EXAM] Request Body:\n%s\n", string(reqBytes))
+	} else {
+		fmt.Printf("[API_SUBMIT_MY_EXAM] Request Body (raw): %+v\n", req)
+	}
+
 	if err := c.doRequest("POST", "/my-exams/submit", req, &resp); err != nil {
+		fmt.Printf("[API_SUBMIT_MY_EXAM] doRequest error: %v\n", err)
 		return nil, err
 	}
+
+	fmt.Printf("[API_SUBMIT_MY_EXAM] 服务器响应:\n")
+	fmt.Printf("[API_SUBMIT_MY_EXAM]   Code   = %d\n", resp.Code)
+	fmt.Printf("[API_SUBMIT_MY_EXAM]   Msg    = %q\n", resp.Msg)
+	if dataBytes, err := json.MarshalIndent(resp.Data, "", "  "); err == nil {
+		fmt.Printf("[API_SUBMIT_MY_EXAM]   Data   = %s\n", string(dataBytes))
+	} else {
+		fmt.Printf("[API_SUBMIT_MY_EXAM]   Data   = %+v\n", resp.Data)
+	}
+	fmt.Printf("[API_SUBMIT_MY_EXAM] ========== 提交我的考试结束 ==========\n")
 
 	if resp.Code != 0 {
 		return nil, fmt.Errorf("submit exam failed: %s", resp.Msg)
@@ -859,13 +895,16 @@ func (c *APIClient) FetchTemplates(limit, offset int) ([]TemplateItem, int, erro
 	}
 
 	dataBytes, _ := json.Marshal(resp.Data)
+	fmt.Printf("[API_FETCH_TEMPLATES] 原始数据: %s\n", string(dataBytes))
 	var templates []TemplateItem
 	json.Unmarshal(dataBytes, &templates)
 
 	fmt.Printf("[API_FETCH_TEMPLATES] 模板数量: %d\n", len(templates))
 	for i, tmpl := range templates {
-		fmt.Printf("[API_FETCH_TEMPLATES]   [%d] ID=%d, 名称=%s, 状态=%s, 题目数=%d, 时长=%d分钟\n",
-			i+1, tmpl.TemplateID, tmpl.ExamName, tmpl.Status, tmpl.QuestionCount, tmpl.DurationMin)
+		fmt.Printf("[API_FETCH_TEMPLATES]   [%d] ID=%d, 名称=%s, 状态=%s, 题目数=%d, 时长=%d分钟, 题型分布={单选:%d, 多选:%d, 判断:%d, 填空:%d, 问答:%d}\n",
+			i+1, tmpl.TemplateID, tmpl.ExamName, tmpl.Status, tmpl.QuestionCount, tmpl.DurationMin,
+			tmpl.QuestionTypeDistribution.SingleChoice, tmpl.QuestionTypeDistribution.MultipleChoice,
+			tmpl.QuestionTypeDistribution.TrueFalse, tmpl.QuestionTypeDistribution.FillBlank, tmpl.QuestionTypeDistribution.Essay)
 	}
 	fmt.Printf("[API_FETCH_TEMPLATES] ========== 获取考试模板列表结束 ==========\n")
 
@@ -1183,9 +1222,23 @@ func (c *APIClient) GetExamResult(sessionID string) (*ExamDetailResult, error) {
 	}
 
 	endpoint := fmt.Sprintf("/my-exams/result/%s", sessionID)
+	fmt.Printf("[API_GET_EXAM_RESULT] ========== 获取考试详情 ==========\n")
+	fmt.Printf("[API_GET_EXAM_RESULT] REQUEST: GET %s\n", BaseURL+endpoint)
+
 	if err := c.doRequest("GET", endpoint, nil, &resp); err != nil {
+		fmt.Printf("[API_GET_EXAM_RESULT] doRequest error: %v\n", err)
 		return nil, err
 	}
+
+	fmt.Printf("[API_GET_EXAM_RESULT] 服务器响应:\n")
+	fmt.Printf("[API_GET_EXAM_RESULT]   Code   = %d\n", resp.Code)
+	fmt.Printf("[API_GET_EXAM_RESULT]   Msg    = %q\n", resp.Msg)
+	if dataBytes, err := json.MarshalIndent(resp.Data, "", "  "); err == nil {
+		fmt.Printf("[API_GET_EXAM_RESULT]   Data   = %s\n", string(dataBytes))
+	} else {
+		fmt.Printf("[API_GET_EXAM_RESULT]   Data   = %+v\n", resp.Data)
+	}
+	fmt.Printf("[API_GET_EXAM_RESULT] ========== 获取考试详情结束 ==========\n")
 
 	if resp.Code != 0 {
 		return nil, fmt.Errorf("get exam result failed: %s", resp.Msg)

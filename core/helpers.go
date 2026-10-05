@@ -505,6 +505,10 @@ func (state *AppState) LoadMyExams(callback func(success bool, exams []network.M
 func (state *AppState) StartMyExam(examID int, callback func(success bool, sessionID string, questions []network.ServerQuestion, msg string)) {
 	sessionData, err := state.APIClient.StartMyExam(examID)
 	if err != nil {
+		if strings.Contains(err.Error(), "exam has timeout") || strings.Contains(err.Error(), "考试已超时") {
+			callback(false, "", nil, "考试已超时")
+			return
+		}
 		if handleServerErrorCode(err, "开始考试", state.Window) {
 			return
 		}

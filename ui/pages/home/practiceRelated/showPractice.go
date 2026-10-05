@@ -662,19 +662,22 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 		statsRow := container.NewStack(statsBg, sizeBox, container.NewCenter(stateBox))
 
 		// --- 底部操作按钮 ---
+		// 判断是否为考试详情页面
+		isExamDetailPage := strings.Contains(state.Title, "考试详情")
+		
 		returnTypeBtn := customElements.CreateButton(
 			core.PracticeReturnTypeBtnText, core.NavButtonWidth, core.NavButtonHeight,
 			core.HexColor(core.CardBgColor),
 			core.HexColor(core.BtnSecondaryBg),
 			core.HexColor(core.BtnSecondaryBg),
 			core.StrokeMedium, core.FontSizeBody,
-			true, false,
+			true, isExamDetailPage,
 			fyne.TextAlignCenter, // 👈 居中对齐
 			fyne.TextWrapOff,     // 👈 不换行
 			fyne.TextTruncateOff, // 👈 不换行（截断）
 			func() { backFunc(w, state) },
 		)
-		// 删除本题：仅错题练习和收藏练习和修正题目模式下可用
+		// 删除本题：仅错题练习和收藏练习和修正题目模式下可用，考试详情页面中不可用
 		delCurrentDataBtn := customElements.CreateButton(
 			core.PracticeDeleteCurrentBtnText, core.NavButtonWidth, core.NavButtonHeight,
 			core.HexColor(core.CardBgColor),
@@ -682,7 +685,8 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 			core.HexColor(core.BtnSecondaryBg),
 			core.StrokeMedium, core.FontSizeBody,
 			true,
-			!strings.Contains(state.Title, "错题练习") &&
+			isExamDetailPage ||
+				!strings.Contains(state.Title, "错题练习") &&
 				!strings.Contains(state.Title, "修正题目") &&
 				!strings.Contains(state.Title, "收藏练习"),
 			fyne.TextAlignCenter, // 👈 居中对齐
@@ -777,7 +781,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 						return true
 					}, w)
 			})
-		// 删除记录：清空本次练习的所有答题记录和对错统计
+		// 删除记录：清空本次练习的所有答题记录和对错统计，考试详情页面中不可用
 		delRecordBtn := customElements.CreateButton(
 			core.PracticeDeleteRecordBtnText, core.NavButtonWidth, core.NavButtonHeight,
 			core.HexColor(core.CardBgColor),
@@ -785,7 +789,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 			core.HexColor(core.BtnSecondaryBg),
 			core.StrokeMedium, core.FontSizeBody,
 			true,
-			false,
+			isExamDetailPage,
 			fyne.TextAlignCenter, // 👈 居中对齐
 			fyne.TextWrapOff,     // 👈 不换行
 			fyne.TextTruncateOff, // 👈 不换行（截断）
