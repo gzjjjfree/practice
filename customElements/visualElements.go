@@ -19,9 +19,11 @@ type CustomButton struct {
 	widget.DisableableWidget
 	OnTapped func()
 
-	btnLabel  *widget.Label
-	btnBg     *canvas.Rectangle
-	container *fyne.Container
+	btnLabel    *widget.Label
+	btnBg       *canvas.Rectangle
+	container   *fyne.Container
+	themedText  fyne.CanvasObject
+	customTheme *buttonTextTheme
 
 	normalBg     color.Color
 	normalText   color.Color
@@ -46,27 +48,70 @@ func (b *CustomButton) Tapped(_ *fyne.PointEvent) {
 
 // Enable 启用按钮
 func (b *CustomButton) Enable() {
+	b.DisableableWidget.Enable()
 	b.disabled = false
+	if b.customTheme != nil {
+		b.customTheme.textColor = b.normalText
+	}
 	if b.btnBg != nil {
 		b.btnBg.FillColor = b.normalBg
 		b.btnBg.StrokeColor = b.normalStroke
 		b.btnBg.Refresh()
 	}
+	if b.themedText != nil {
+		b.themedText.Refresh()
+	}
 	// 校验 b.btnLabel 防止 nil 引用
 	if b.btnLabel != nil {
-		// 如果需要修改文本颜色，可以通过刷新容器或重新渲染实现
 		b.btnLabel.Refresh()
+	}
+	if b.container != nil {
+		b.container.Refresh()
 	}
 	b.Refresh()
 }
 
 // Disable 禁用按钮
 func (b *CustomButton) Disable() {
+	b.DisableableWidget.Disable()
 	b.disabled = true
+	if b.customTheme != nil {
+		b.customTheme.textColor = b.disabledText
+	}
 	if b.btnBg != nil {
 		b.btnBg.FillColor = b.disabledBg
 		b.btnBg.StrokeColor = b.disabledStroke
 		b.btnBg.Refresh()
+	}
+	if b.themedText != nil {
+		b.themedText.Refresh()
+	}
+	if b.btnLabel != nil {
+		b.btnLabel.Refresh()
+	}
+	if b.container != nil {
+		b.container.Refresh()
+	}
+	b.Refresh()
+}
+
+// SetColors 动态设置按钮的颜色属性
+func (b *CustomButton) SetColors(bg, text, stroke color.Color) {
+	b.normalBg = bg
+	b.normalText = text
+	b.normalStroke = stroke
+	if !b.disabled && !b.Disabled() {
+		if b.customTheme != nil {
+			b.customTheme.textColor = text
+		}
+		if b.btnBg != nil {
+			b.btnBg.FillColor = bg
+			b.btnBg.StrokeColor = stroke
+			b.btnBg.Refresh()
+		}
+	}
+	if b.themedText != nil {
+		b.themedText.Refresh()
 	}
 	if b.btnLabel != nil {
 		b.btnLabel.Refresh()
@@ -167,6 +212,8 @@ func CreateButton(
 		btnLabel:       lbl,
 		btnBg:          btnBg,
 		container:      sizedContainer,
+		themedText:     themedText,
+		customTheme:    customTheme,
 		normalBg:       bgColor,
 		normalText:     textColor,
 		normalStroke:   strokeColor,

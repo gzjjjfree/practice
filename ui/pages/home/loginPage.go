@@ -69,31 +69,51 @@ func ShowLoginPage(w fyne.Window, state *core.AppState, backToHome func()) {
 
 	// Unified login action to satisfy DRY principle
 	onLoginSubmit := func() {
-		// 禁用登录按钮，防止因网络延迟导致的连续点击
-		if loginBtn != nil {
-			loginBtn.Disable()
+		username := strings.TrimSpace(usernameInput.Text)
+		password := passwordInput.Text
+
+		if username == "" || password == "" {
+			customElements.ShowCustomInformation("提示", "请输入用户名和密码", w)
+			return
 		}
 
-		handleLogin(
-			state,
-			usernameInput,
-			passwordInput,
-			func() {
-				// 登录成功，启用按钮（虽然会跳转，但为了完整性）
-				if loginBtn != nil {
-					loginBtn.Enable()
-				}
-			},
-			func(msg string) {
-				// 登录失败，启用按钮
-				if loginBtn != nil {
-					loginBtn.Enable()
-				}
-				customElements.ShowCustomInformation("登录失败", msg, w)
-			},
-			backToHome,
-			w,
-		)
+		// 禁用登录按钮，防止因网络延迟导致的连续点击，并给予用户清晰的已点击视觉反馈
+		if loginBtn != nil {
+			loginBtn.Disable()
+			fmt.Printf("DEBUG ShowLoginPage: loginBtn clicked, type=%T, disabled=%v\n", loginBtn, loginBtn.Disabled())
+
+		}
+
+		go func() {
+			handleLogin(
+				state,
+				usernameInput,
+				passwordInput,
+				func() {
+					fyne.Do(func() {
+						// 登录成功，启用按钮（虽然会跳转，但为了完整性）
+						if loginBtn != nil {
+							loginBtn.Enable()
+						}
+					})
+				},
+				func(msg string) {
+					fyne.Do(func() {
+						// 登录失败，启用按钮
+						if loginBtn != nil {
+							loginBtn.Enable()
+						}
+						customElements.ShowCustomInformation("登录失败", msg, w)
+					})
+				},
+				func() {
+					fyne.Do(func() {
+						backToHome()
+					})
+				},
+				w,
+			)
+		}()
 	}
 
 	// Pressing Enter on Username shifts focus to Password; Pressing Enter on Password triggers Login
@@ -172,15 +192,15 @@ func ShowLoginPage(w fyne.Window, state *core.AppState, backToHome func()) {
 	cardContent := container.NewPadded(cardInner)
 	cardStack := container.NewStack(cardBg, cardContent)
 
-	// 固定卡片宽度为 380px
-	sizedCard := container.NewGridWrap(fyne.NewSize(380, cardStack.MinSize().Height), cardStack)
+	// 响应式宽度卡片（最大 380px，左右各保留至少 20px 边距）
+	responsiveCard := container.New(&ResponsiveWidthLayout{MaxWidth: 380, Margin: 10}, cardStack)
 
 	// =================【重点：使用 1:2 空间比例锁定 1/3 位置】=================
 	topOneThirdContainer := container.New(
 		layout.NewVBoxLayout(),
-		layout.NewSpacer(),             // 上方占 1 份空间
-		container.NewCenter(sizedCard), // 登录卡片（置于上方 1/3 处）
-		layout.NewSpacer(),             // 下方占 2 份空间（2 个 Spacer 叠加）
+		layout.NewSpacer(), // 上方占 1 份空间
+		responsiveCard,     // 登录卡片（自适应宽度，置于上方 1/3 处）
+		layout.NewSpacer(), // 下方占 2 份空间（2 个 Spacer 叠加）
 		layout.NewSpacer(),
 	)
 
@@ -218,4 +238,36 @@ func handleLogin(state *core.AppState, usernameInput *widget.Entry, passwordInpu
 			onFailed(msg)
 		}
 	})
+}
+
+// ResponsiveWidthLayout 实现响应式宽度布局，模拟 max-width 并保证左右边距
+type ResponsiveWidthLayout struct {
+	MaxWidth float32
+	Margin   float32
+}
+
+func (l *ResponsiveWidthLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	obj := objects[0]
+	w := size.Width - (l.Margin * 2)
+	if w > l.MaxWidth {
+		w = l.MaxWidth
+	}
+	if w < 100 {
+		w = 100
+	}
+	minSize := obj.MinSize()
+	obj.Resize(fyne.NewSize(w, minSize.Height))
+	x := (size.Width - w) / 2
+	obj.Move(fyne.NewPos(x, 0))
+}
+
+func (l *ResponsiveWidthLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) == 0 {
+		return fyne.NewSize(0, 0)
+	}
+	minSize := objects[0].MinSize()
+	return fyne.NewSize(l.MaxWidth+l.Margin*2, minSize.Height)
 }

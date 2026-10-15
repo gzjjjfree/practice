@@ -169,7 +169,7 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 		// All logged-in users can access "题库管理"
 		bankManageBtn := customElements.CreateButton(
 			"题库管理",
-			130,
+			0,
 			core.ActionBtnHeight,
 			core.HexColor(core.CardBgColor),
 			core.HexColor(core.ColorSelectedBorder),
@@ -194,7 +194,7 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 			// Admin: show "推送考试" button
 			pushExamBtn := customElements.CreateButton(
 				"推送考试",
-				130, core.ActionBtnHeight,
+				0, core.ActionBtnHeight,
 				core.HexColor(core.CardBgColor),
 				core.HexColor("#8C27B0"),
 				core.HexColor("#8C27B0"),
@@ -214,7 +214,7 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 			// Regular user: show "我的考试" button
 			myExamsBtn := customElements.CreateButton(
 				"我的考试",
-				130, core.ActionBtnHeight,
+				0, core.ActionBtnHeight,
 				core.HexColor(core.CardBgColor),
 				core.HexColor("#4CAF50"),
 				core.HexColor("#4CAF50"),
@@ -233,7 +233,7 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 
 		logoutBtn := customElements.CreateButton(
 			"退出 ("+core.TruncateUsername(state.Username)+")",
-			120,
+			0,
 			core.ActionBtnHeight,
 			core.HexColor(core.CardBgColor),
 			core.HexColor("#FF6B6B"),
@@ -394,10 +394,10 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 			)
 
 			mLeft := canvas.NewRectangle(color.Transparent)
-			mLeft.SetMinSize(fyne.NewSize(6, 0))
+			mLeft.SetMinSize(fyne.NewSize(3, 0))
 
 			mRight := canvas.NewRectangle(color.Transparent)
-			mRight.SetMinSize(fyne.NewSize(10, 0))
+			mRight.SetMinSize(fyne.NewSize(8, 0))
 
 			itemWithMargin := container.NewBorder(nil, nil, mLeft, mRight, clickableRow)
 			fileListContainer.Add(itemWithMargin)

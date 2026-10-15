@@ -25,6 +25,57 @@ import (
 	"github.com/gzjjjfree/practice/storageRelated"
 )
 
+// throttleFunc 节流函数包装器，限制回调函数的执行频率。
+//
+// 功能说明：
+// 使用时间戳节流（throttling）模式，确保在指定时间间隔内只执行一次回调。
+// 适用于高频触发的 UI 事件（如筛选、滚动、输入等），避免过度刷新。
+//
+// 输入参数：
+//   - fn: func()，要包装执行的函数。
+//   - wait: time.Duration，节流等待时间（毫秒）。
+//
+// 返回值：
+//   - func()：包装后的节流函数。
+func throttleFunc(fn func(), wait time.Duration) func() {
+	var lastCall time.Time
+	var mu sync.Mutex
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now()
+		if now.Sub(lastCall) >= wait {
+			lastCall = now
+			fn()
+		}
+	}
+}
+
+// debounceFunc 防抖函数包装器，在最后一次调用后延迟执行。
+//
+// 功能说明：
+// 使用防抖（debouncing）模式，在指定延迟时间内不再触发时再执行回调。
+// 适用于用户操作结束后的事件处理（如搜索框输入完成、窗口调整等）。
+//
+// 输入参数：
+//   - fn: func()，要包装执行的函数。
+//   - wait: time.Duration，防抖等待时间。
+//
+// 返回值：
+//   - func()：包装后的防抖函数。
+func debounceFunc(fn func(), wait time.Duration) func() {
+	var timer *time.Timer
+	var mu sync.Mutex
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if timer != nil {
+			timer.Stop()
+		}
+		timer = time.AfterFunc(wait, fn)
+	}
+}
+
 // checkIfQuestionsSelectedFull 检查是否已根据 ws.typeCounts 选择完所有必要题型的题目。
 //
 // 功能说明：
@@ -159,24 +210,24 @@ type AdminExamCreateState struct {
 	// 考试设置确认状态
 	examParamsConfirmed bool // 考试设置是否已确认
 	// UI 引用（用于动态更新）
-	qListVBox           *fyne.Container              // 题目列表容器
-	qListScroll         *container.Scroll            // 题目列表滚动容器
-	titleLabel          *widget.Label                // 选择题目页标题标签（用于动态更新）
-	nameEntry           *widget.Entry                // 考试名称输入框
-	durationEntry       *widget.Entry                // 考试时长输入框
-	startTimeLbl        *widget.Label                // 开始时间显示标签
-	endTimeLbl          *widget.Label                // 结束时间显示标签
-	typeEntries         map[string]*widget.Entry     // 每种题型数量输入框
-	typeScoreEntries    map[string]*widget.Entry     // 每种题型分值输入框
-	userVBox            *fyne.Container              // 用户列表容器
-	userScroll          *container.Scroll            // 用户列表滚动容器
-	createBtn           *customElements.CustomButton // 创建推送按钮
-	examParamsContent   *fyne.Container              // 考试设置页面内容容器
-	examParamsSummary   *fyne.Container              // 考试设置统计信息容器
-	wizard              *container.AppTabs           // 向导 TabContainer 引用
-	templateRefreshFunc func()                       // 模板列表刷新函数
-	userPageRefreshFunc func()                       // 目标用户页刷新函数
-	confirmPageRefreshFunc func()                    // 确认推送页刷新函数
+	qListVBox              *fyne.Container              // 题目列表容器
+	qListScroll            *container.Scroll            // 题目列表滚动容器
+	titleLabel             *widget.Label                // 选择题目页标题标签（用于动态更新）
+	nameEntry              *widget.Entry                // 考试名称输入框
+	durationEntry          *widget.Entry                // 考试时长输入框
+	startTimeLbl           *widget.Label                // 开始时间显示标签
+	endTimeLbl             *widget.Label                // 结束时间显示标签
+	typeEntries            map[string]*widget.Entry     // 每种题型数量输入框
+	typeScoreEntries       map[string]*widget.Entry     // 每种题型分值输入框
+	userVBox               *fyne.Container              // 用户列表容器
+	userScroll             *container.Scroll            // 用户列表滚动容器
+	createBtn              *customElements.CustomButton // 创建推送按钮
+	examParamsContent      *fyne.Container              // 考试设置页面内容容器
+	examParamsSummary      *fyne.Container              // 考试设置统计信息容器
+	wizard                 *CustomWizardTabs            // 向导 TabContainer 引用
+	templateRefreshFunc    func()                       // 模板列表刷新函数
+	userPageRefreshFunc    func()                       // 目标用户页刷新函数
+	confirmPageRefreshFunc func()                       // 确认推送页刷新函数
 }
 
 // ShowAdminExamCreate 打开管理员考试创建向导。
@@ -190,11 +241,12 @@ type AdminExamCreateState struct {
 //   - backToHome: func()，返回主页的回调函数，点击返回按钮时触发。
 func ShowAdminExamCreate(w fyne.Window, state *core.AppState, backToHome func()) {
 	ws := &AdminExamCreateState{
-		sourceTab:        0,
-		selectedQIDs:     make(map[string]bool),
-		selectedUsers:    make(map[int]bool),
-		typeScores:       make(map[string]float64),
-		typeScoreEntries: make(map[string]*widget.Entry),
+		sourceTab:           0,
+		selectedQIDs:        make(map[string]bool),
+		selectedUsers:       make(map[int]bool),
+		typeScores:          make(map[string]float64),
+		typeScoreEntries:    make(map[string]*widget.Entry),
+		questionFilterTypes: make(map[string]bool),
 	}
 	for _, t := range []string{"单选题", "多选题", "判断题", "填空题", "问答题"} {
 		ws.typeScores[t] = 1.0
@@ -209,7 +261,8 @@ func ShowAdminExamCreate(w fyne.Window, state *core.AppState, backToHome func())
 		buildTemplateListPage(ws, w, state),
 	}
 
-	ws.wizard = container.NewAppTabs(
+	var wizardWidget fyne.CanvasObject
+	ws.wizard, wizardWidget = NewCustomWizardTabs(
 		container.NewTabItem(core.AdminTabSource, wizardPages[0]),
 		container.NewTabItem(core.AdminTabExamParams, wizardPages[1]),
 		container.NewTabItem(core.AdminTabSelect, wizardPages[2]),
@@ -217,8 +270,7 @@ func ShowAdminExamCreate(w fyne.Window, state *core.AppState, backToHome func())
 		container.NewTabItem(core.AdminTabConfirm, wizardPages[4]),
 		container.NewTabItem(core.AdminTabTemplates, wizardPages[5]),
 	)
-	// 移除 OnSelected 内部对 ws.wizard.Refresh() 以及动态赋值 Content 的复杂回调逻辑，避免在初始化渲染时触发 applyTheme/scroller 内部的 nil pointer dereference 异常。
-	ws.wizard.OnSelected = func(item *container.TabItem) {
+	ws.wizard.onSelected = func(item *container.TabItem) {
 		switch item.Text {
 		case core.AdminTabTemplates:
 			if ws.templateRefreshFunc != nil {
@@ -261,11 +313,9 @@ func ShowAdminExamCreate(w fyne.Window, state *core.AppState, backToHome func())
 
 	topBar := container.NewBorder(nil, nil, backBtn, nil, titleCenter)
 	pageBg := canvas.NewRectangle(core.HexColor(core.PageBgColor))
-	// 直接将 ws.wizard 放入 Border 布局，而不是用 VScroll 嵌套 AppTabs，避免 AppTabs 的 scroller 在未完全初始化时产生 nil pointer dereference
-	mainLayout := container.NewBorder(topBar, nil, nil, nil, ws.wizard)
+	mainLayout := container.NewBorder(topBar, nil, nil, nil, wizardWidget)
 	wRootLayout := container.NewStack(pageBg, mainLayout)
 	w.SetContent(wRootLayout)
-	ws.wizard.SetTabLocation(container.TabLocationLeading)
 }
 
 // ==================== Step 1: 题库来源选择 ====================
@@ -599,7 +649,12 @@ func buildSourcePage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSta
 		container.NewHBox(layout.NewSpacer(), localBtn, serverBtn, layout.NewSpacer()),
 	)
 
-	return container.NewPadded(sourceContainer)
+	return container.NewPadded(container.NewVBox(
+		layout.NewSpacer(),
+		container.NewCenter(sourceContainer),
+		layout.NewSpacer(),
+		layout.NewSpacer(),
+	))
 }
 
 // updateSourceSelection 更新题库来源选择状态并刷新题目列表。
@@ -636,7 +691,7 @@ func refreshQuestionList(ws *AdminExamCreateState) {
 	if !ws.examParamsConfirmed {
 		noData := canvas.NewText(core.AdminParamsNotSetMsg, core.HexColor(core.TextMutedColor))
 		noData.Alignment = fyne.TextAlignCenter
-		noData.TextSize = 14
+		noData.TextSize = 30
 		ws.qListVBox.Add(noData)
 		ws.qListVBox.Refresh()
 		return
@@ -671,8 +726,11 @@ func refreshQuestionList(ws *AdminExamCreateState) {
 //   - fyne.CanvasObject：题目选择列表页面的UI容器对象。
 func buildQuestionSelectPage(ws *AdminExamCreateState) fyne.CanvasObject {
 	if !ws.examParamsConfirmed {
+		noParamsData := canvas.NewText(core.AdminParamsNotSetMsg, core.HexColor(core.TextMutedColor))
+		noParamsData.Alignment = fyne.TextAlignCenter
+		noParamsData.TextSize = 30
 		return container.NewPadded(container.NewCenter(
-			canvas.NewText(core.AdminParamsNotSetMsg, core.HexColor(core.TextMutedColor)),
+			noParamsData,
 		))
 	}
 
@@ -687,17 +745,36 @@ func buildQuestionSelectPage(ws *AdminExamCreateState) fyne.CanvasObject {
 
 	typeOrder := []string{"单选题", "多选题", "判断题", "填空题", "问答题"}
 	var checkObjs []fyne.CanvasObject
+	checkBoxes := make(map[string]*widget.Check)
+	throttledRefresh := throttleFunc(func() {
+		refreshQuestionList(ws)
+	}, 150*time.Millisecond)
+
+	var updating bool
 	for _, qType := range typeOrder {
 		t := qType
 		cb := widget.NewCheck(t, func(checked bool) {
-			ws.questionFilterTypes[t] = checked
-			refreshQuestionList(ws)
-			// 刷新目标用户页状态
-			if ws.userPageRefreshFunc != nil {
-				ws.userPageRefreshFunc()
+			if updating {
+				return
 			}
+			updating = true
+			defer func() { updating = false }()
+
+			if checked {
+				for otherType, otherCb := range checkBoxes {
+					if otherType != t {
+						otherCb.SetChecked(false)
+						ws.questionFilterTypes[otherType] = false
+					}
+				}
+				ws.questionFilterTypes[t] = true
+			} else {
+				ws.questionFilterTypes[t] = false
+			}
+			throttledRefresh()
 		})
 		cb.SetChecked(ws.questionFilterTypes[t])
+		checkBoxes[t] = cb
 		checkObjs = append(checkObjs, cb)
 	}
 	filterBox := container.NewGridWrap(fyne.NewSize(130, core.LayoutSpacingH20), checkObjs...)
@@ -713,15 +790,11 @@ func buildQuestionSelectPage(ws *AdminExamCreateState) fyne.CanvasObject {
 		fyne.TextAlignCenter,
 		fyne.TextWrapOff,
 		fyne.TextTruncateOff,
-		func() {
+		throttleFunc(func() {
 			randomFillQuestions(ws)
 			refreshQuestionList(ws)
 			updateQuestionSelectTitle(ws)
-			// 刷新目标用户页状态
-			if ws.userPageRefreshFunc != nil {
-				ws.userPageRefreshFunc()
-			}
-		},
+		}, 200*time.Millisecond),
 	)
 
 	filterRow := container.NewBorder(nil, nil, filterBox, randomFillBtn)
@@ -1195,8 +1268,11 @@ func applyTemplate(ws *AdminExamCreateState) {
 //   - fyne.CanvasObject：考试参数设置页面的UI容器对象。
 func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppState) fyne.CanvasObject {
 	if len(ws.localBankKeys) == 0 && len(ws.serverBankIDs) == 0 {
+		noSourceData := canvas.NewText(core.AdminSourceNotSetMsg, core.HexColor(core.TextMutedColor))
+		noSourceData.Alignment = fyne.TextAlignCenter
+		noSourceData.TextSize = 30
 		return container.NewPadded(container.NewCenter(
-			canvas.NewText(core.AdminSourceNotSetMsg, core.HexColor(core.TextMutedColor)),
+			noSourceData,
 		))
 	}
 
@@ -1241,9 +1317,8 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 	ws.startTimeStr = startTimeDefault
 	ws.endTimeStr = endTimeDefault
 
-	// 设置时间按钮（标识符：setTimeBtn返回的自定义按钮对象，名称："设置时间"）：点击后快速将对应的时间标签设置为当前时间或当前时间加偏移量。
+	// 设置时间按钮（标识符：setTimeBtn返回的自定义按钮对象，名称："修改"）：点击后弹出时间选择对话框。
 	setTimeBtn := func(lbl *widget.Label, defaultOffset time.Duration) *customElements.CustomButton {
-
 		return customElements.CreateButton(
 			core.AdminTimeEditBtnText,
 			core.BtnSmallWidth, core.BtnSmallHeight,
@@ -1255,14 +1330,23 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 			fyne.TextWrapOff,     // 👈 不换行
 			fyne.TextTruncateOff, // 👈 不换行（截断）
 			func() {
-				now := time.Now().Add(defaultOffset)
-				formatted := now.Format("2006-01-02 15:04")
-				lbl.SetText(formatted)
-				if lbl == ws.startTimeLbl {
-					ws.startTimeStr = formatted
-				} else if lbl == ws.endTimeLbl {
-					ws.endTimeStr = formatted
+				// 获取当前标签显示的时间作为默认值
+				defaultTime := time.Now().Add(defaultOffset)
+				if lbl != nil && lbl.Text != "" {
+					t, err := time.Parse("2006-01-02 15:04", lbl.Text)
+					if err == nil {
+						defaultTime = t
+					}
 				}
+				customElements.ShowTimePickerDialog(w, defaultTime, func(result customElements.TimePickerResult) {
+					formatted := customElements.TimeResultToString(result)
+					lbl.SetText(formatted)
+					if lbl == ws.startTimeLbl {
+						ws.startTimeStr = formatted
+					} else if lbl == ws.endTimeLbl {
+						ws.endTimeStr = formatted
+					}
+				})
 			},
 		)
 	}
@@ -1375,6 +1459,13 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 				return
 			}
 
+			startTime, err1 := time.Parse("2006-01-02 15:04", ws.startTimeLbl.Text)
+			endTime, err2 := time.Parse("2006-01-02 15:04", ws.endTimeLbl.Text)
+			if err1 != nil || err2 != nil || endTime.Sub(startTime) < 30*time.Minute {
+				customElements.ShowCustomInformation(core.AdminErrorText, core.AdminEndTimeInvalidErr, w)
+				return
+			}
+
 			ws.examName = ws.nameEntry.Text
 			ws.startTimeStr = ws.startTimeLbl.Text
 			ws.endTimeStr = ws.endTimeLbl.Text
@@ -1416,6 +1507,11 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 			if ws.wizard != nil && len(ws.wizard.Items) > 2 {
 				qSelectPage := buildQuestionSelectPage(ws)
 				ws.wizard.Items[2] = container.NewTabItem(ws.wizard.Items[2].Text, qSelectPage)
+				ws.wizard.Refresh()
+			}
+			if ws.wizard != nil && len(ws.wizard.Items) > 3 {
+				userPage := buildUserSelectPage(ws, state)
+				ws.wizard.Items[3] = container.NewTabItem(ws.wizard.Items[3].Text, userPage)
 				ws.wizard.Refresh()
 			}
 
@@ -1534,6 +1630,15 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 // 返回值：
 //   - fyne.CanvasObject：目标用户选择页面的UI容器对象。
 func buildUserSelectPage(ws *AdminExamCreateState, state *core.AppState) fyne.CanvasObject {
+	if !checkIfQuestionsSelectedFull(ws) {
+		noData := canvas.NewText(core.AdminNoQuestionsSelectedMsg, core.HexColor(core.TextMutedColor))
+		noData.Alignment = fyne.TextAlignCenter
+		noData.TextSize = 30
+		return container.NewPadded(container.NewCenter(
+			noData,
+		))
+	}
+
 	ws.userVBox = container.NewVBox()
 	ws.userScroll = container.NewVScroll(ws.userVBox)
 	ws.userScroll.SetMinSize(fyne.NewSize(0, core.AdminUserListHeight))
@@ -1548,27 +1653,24 @@ func buildUserSelectPage(ws *AdminExamCreateState, state *core.AppState) fyne.Ca
 
 	// 定义刷新函数
 	refreshUserPage := func() {
-		isFull := checkIfQuestionsSelectedFull(ws)
-		fmt.Printf("[DEBUG refreshUserPage] checkIfQuestionsSelectedFull result: %v\n", isFull)
-		
-		// 清空用户列表容器
-		ws.userVBox.Objects = nil
-		
-		if !isFull {
-			noData := canvas.NewText(core.AdminNoQuestionsSelectedMsg, core.HexColor(core.TextMutedColor))
-			noData.Alignment = fyne.TextAlignCenter
-			noData.TextSize = 14
-			ws.userVBox.Add(noData)
-			ws.userVBox.Refresh()
-			return
+		if ws.wizard != nil && len(ws.wizard.Items) > 3 {
+			userPage := buildUserSelectPage(ws, state)
+			ws.wizard.Items[3] = container.NewTabItem(ws.wizard.Items[3].Text, userPage)
+			ws.wizard.Refresh()
 		}
+	}
 
-		loadingText := canvas.NewText(core.AdminLoadingText, core.HexColor(core.TextHintColor))
-		loadingText.Alignment = fyne.TextAlignCenter
-		loadingText.TextSize = 14
-		ws.userVBox.Add(loadingText)
+	// 保存刷新函数到状态中
+	ws.userPageRefreshFunc = refreshUserPage
 
-		state.FetchAllUsers(func(success bool, users []network.UserItem, total int, msg string) {
+	ws.userVBox.Objects = nil
+
+	loadingText := canvas.NewText(core.AdminLoadingText, core.HexColor(core.TextHintColor))
+	loadingText.Alignment = fyne.TextAlignCenter
+	loadingText.TextSize = 14
+	ws.userVBox.Add(loadingText)
+
+	state.FetchAllUsers(func(success bool, users []network.UserItem, total int, msg string) {
 			ws.userVBox.Objects = nil
 
 			if !success {
@@ -1716,13 +1818,6 @@ func buildUserSelectPage(ws *AdminExamCreateState, state *core.AppState) fyne.Ca
 
 			ws.userVBox.Refresh()
 		})
-	}
-
-	// 保存刷新函数到状态中
-	ws.userPageRefreshFunc = refreshUserPage
-
-	// 初始检查并加载用户列表
-	refreshUserPage()
 
 	content := container.NewVBox(titleLabel, ws.userScroll)
 	return container.NewPadded(content)
@@ -1785,13 +1880,20 @@ func buildConfirmPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSt
 				return
 			}
 
+			startTime, err1 := time.Parse("2006-01-02 15:04", ws.startTimeLbl.Text)
+			endTime, err2 := time.Parse("2006-01-02 15:04", ws.endTimeLbl.Text)
+			if err1 != nil || err2 != nil || endTime.Sub(startTime) < 30*time.Minute {
+				customElements.ShowCustomInformation(core.AdminErrorText, core.AdminEndTimeInvalidErr, w)
+				return
+			}
+
 			if !checkIfQuestionsSelectedFull(ws) {
 				customElements.ShowCustomInformation(core.AdminErrorText, core.AdminParamsNotSetMsg, w)
 				return
 			}
 
 			if len(ws.selectedUsers) == 0 {
-				customElements.ShowCustomInformation(core.AdminInfoText, core.AdminNoUsersSelectedMsg, nil)
+				customElements.ShowCustomInformation(core.AdminInfoText, core.AdminUsersNotSetdMsg, nil)
 				return
 			}
 
@@ -1896,8 +1998,11 @@ func buildConfirmPage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSt
 	title.Alignment = fyne.TextAlignCenter
 
 	if len(ws.selectedUsers) < 1 {
+		noUsersData := canvas.NewText(core.AdminUsersNotSetdMsg, core.HexColor(core.TextMutedColor))
+		noUsersData.Alignment = fyne.TextAlignCenter
+		noUsersData.TextSize = 30
 		return container.NewPadded(container.NewCenter(
-			canvas.NewText(core.AdminNoUsersSelectedForConfirmMsg, core.HexColor(core.TextMutedColor)),
+			noUsersData,
 		))
 	}
 
@@ -2607,4 +2712,117 @@ func showCancelExamConfirmForTemplate(w fyne.Window, state *core.AppState, tmpl 
 			}
 			return true // 返回 true 表示对话框可以关闭
 		}, w)
+}
+
+// CustomWizardTabs 自定义两行顶部向导选项卡组件，替代默认 AppTabs 以支持固定顶部及分两行显示。
+type CustomWizardTabs struct {
+	Items       []*container.TabItem
+	activeIndex int
+	contentArea *fyne.Container
+	tabBtns     []*customElements.CustomButton
+	onSelected  func(item *container.TabItem)
+}
+
+func (w *CustomWizardTabs) Refresh() {
+	if w.activeIndex >= 0 && w.activeIndex < len(w.Items) {
+		w.contentArea.Objects = []fyne.CanvasObject{w.Items[w.activeIndex].Content}
+		w.contentArea.Refresh()
+	}
+	for i, btn := range w.tabBtns {
+		if btn == nil {
+			continue
+		}
+		if i == w.activeIndex {
+			btn.SetColors(
+				core.HexColor(core.BtnPrimaryBg),
+				core.HexColor(core.CardBgColor),
+				core.HexColor(core.BtnPrimaryBg),
+			)
+		} else {
+			btn.SetColors(
+				core.HexColor(core.CardBgColor),
+				core.HexColor(core.TextPrimaryColor),
+				core.HexColor(core.BorderLightColor),
+			)
+		}
+	}
+}
+
+func (w *CustomWizardTabs) Select(index int) {
+	if index < 0 || index >= len(w.Items) {
+		return
+	}
+	w.activeIndex = index
+	w.Refresh()
+	if w.onSelected != nil {
+		w.onSelected(w.Items[index])
+	}
+}
+
+func NewCustomWizardTabs(items ...*container.TabItem) (*CustomWizardTabs, fyne.CanvasObject) {
+	wizard := &CustomWizardTabs{
+		Items:       items,
+		activeIndex: 0,
+		contentArea: container.NewStack(),
+	}
+
+	var tabBtns []*customElements.CustomButton
+	var row1Objs []fyne.CanvasObject
+	var row2Objs []fyne.CanvasObject
+
+	for i, item := range items {
+		idx := i
+		it := item
+		btn := customElements.CreateButton(
+			it.Text,
+			115, 36,
+			core.HexColor(core.CardBgColor),
+			core.HexColor(core.TextPrimaryColor),
+			core.HexColor(core.BorderLightColor),
+			1, 14, false, false,
+			fyne.TextAlignCenter,
+			fyne.TextWrapOff,
+			fyne.TextTruncateOff,
+			func() {
+				wizard.Select(idx)
+			},
+		)
+		tabBtns = append(tabBtns, btn)
+		if i < 3 {
+			row1Objs = append(row1Objs, btn)
+		} else {
+			row2Objs = append(row2Objs, btn)
+		}
+	}
+	wizard.tabBtns = tabBtns
+
+	row1 := container.NewHBox(layout.NewSpacer(), row1Objs[0], row1Objs[1], row1Objs[2], layout.NewSpacer())
+	var row2 fyne.CanvasObject
+	if len(row2Objs) > 0 {
+		row2Container := []fyne.CanvasObject{layout.NewSpacer()}
+		for _, b := range row2Objs {
+			row2Container = append(row2Container, b)
+		}
+		row2Container = append(row2Container, layout.NewSpacer())
+		row2 = container.NewHBox(row2Container...)
+	}
+
+	tabBarVBox := container.NewVBox(
+		container.NewGridWrap(fyne.NewSize(1, 4)),
+		row1,
+		container.NewGridWrap(fyne.NewSize(1, 6)),
+	)
+	if row2 != nil {
+		tabBarVBox.Add(row2)
+		tabBarVBox.Add(container.NewGridWrap(fyne.NewSize(1, 6)))
+	}
+	sepLine := canvas.NewRectangle(core.HexColor("#78909C"))
+	sepLine.SetMinSize(fyne.NewSize(10, 3))
+	tabBarVBox.Add(sepLine)
+	tabBarVBox.Add(container.NewGridWrap(fyne.NewSize(1, 4)))
+
+	wizard.Refresh()
+
+	layoutObj := container.NewBorder(tabBarVBox, nil, nil, nil, wizard.contentArea)
+	return wizard, layoutObj
 }

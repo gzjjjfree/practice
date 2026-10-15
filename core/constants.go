@@ -159,7 +159,8 @@ const (
 	AdminNoQuestionsSelectedMsg    = "请先完成选择题目"
 	AdminNoFilteredQuestionsMsg    = "没有符合筛选条件的题目"
 	AdminParamsNotSetMsg           = "请先完成考试设置"
-	AdminSourceNotSetMsg           = "请先完成题库来源设置"
+	AdminSourceNotSetMsg           = "请先完成题库来源"
+	AdminUsersNotSetdMsg           = "请先完成用户选择"
 	AdminTemplateSelectPrompt      = "请选择模板（点击选择后自动填充考试参数）："
 	AdminSuccessSetConfirmed       = "✅ 考试设置已确认成功"
 
@@ -169,7 +170,6 @@ const (
 	AdminCreatePushBtnText          = "✅ 创建并推送考试"
 	AdminNoQuestionsAvailableMsg    = "暂无题目可选题"
 	AdminConfirmPushTitle           = "确认推送"
-	AdminNoUsersSelectedMsg         = "请先完成用户选择"
 	AdminUserSelectionTitleTemplate = "选择目标用户（已选 %d 人）"
 	AdminLoadingText                = "加载中..."
 	AdminExamNameSummaryTemplate    = "考试名称: %s"
@@ -201,7 +201,7 @@ const (
 	AdminTimeFormatErrorMsg           = "请输入有效的考试时间（分钟）"
 	AdminTimeFormatErrMsg             = "请输入考试时间（分钟）"
 	AdminTypeCountRequiredErr         = "请至少设置一种题型的数量"
-	AdminNoUsersSelectedErr           = "请先完成用户选择"
+	AdminEndTimeInvalidErr            = "结束时间必须大于开始时间30分钟以上"
 	AdminNoUsersSelectedForConfirmMsg = "请先完成选择用户"
 	AdminOtherUsersLabel              = "其他用户:"
 
