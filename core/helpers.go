@@ -231,19 +231,43 @@ func IsAnswerCorrect(userAnswer string, q Question) bool {
 	return true
 }
 
+// NormalizeAnswerLabel 将全角/半角字母或答案进行规范化（如全角 "Ｃ" 转为半角 "C"）
+func NormalizeAnswerLabel(s string) string {
+	s = strings.TrimSpace(s)
+	var sb strings.Builder
+	for _, r := range s {
+		// 全角大写字母 A-Z (U+FF21 - U+FF3A) 转半角
+		if r >= '\uff21' && r <= '\uff3a' {
+			sb.WriteRune(r - '\uff21' + 'A')
+		} else if r >= '\uff41' && r <= '\uff5a' {
+			// 全角小写字母 a-z (U+FF41 - U+FF5A) 转半角大写
+			sb.WriteRune(r - '\uff41' + 'A')
+		} else if r >= 'a' && r <= 'z' {
+			// 小写转大写
+			sb.WriteRune(r - 'a' + 'A')
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
 // NormalizeAnswerSlice 将用户答案字符串切分为排序后的标准答案切片。
 func NormalizeAnswerSlice(userAnswer string, q Question) []string {
 	var slice []string
+	userAnswer = NormalizeAnswerLabel(userAnswer)
 	if q.Type == "多选题" && strings.Contains(userAnswer, ",") {
 		for _, part := range strings.Split(userAnswer, ",") {
-			slice = append(slice, strings.TrimSpace(part))
+			if s := NormalizeAnswerLabel(part); s != "" {
+				slice = append(slice, s)
+			}
 		}
-	} else if len(userAnswer) == 1 {
+	} else if len(userAnswer) == 1 || (len(userAnswer) > 0 && len(userAnswer) <= 3 && !strings.Contains(userAnswer, "、")) {
 		slice = []string{userAnswer}
 	} else {
 		// 填空/问答等：按顿号拆分
 		for _, part := range strings.Split(userAnswer, "、") {
-			if s := strings.TrimSpace(part); s != "" {
+			if s := NormalizeAnswerLabel(part); s != "" {
 				slice = append(slice, s)
 			}
 		}
@@ -1095,10 +1119,13 @@ func SyncQuestionsToState(state *AppState, bankData *parser.BankData) {
 		var answers []string
 		cleanAns := strings.NewReplacer("、", "", ",", "", " ", "").Replace(srcQ.Answer)
 		for _, char := range cleanAns {
-			answers = append(answers, string(char))
+			norm := NormalizeAnswerLabel(string(char))
+			if norm != "" {
+				answers = append(answers, norm)
+			}
 		}
 		if len(answers) == 0 && srcQ.Answer != "" {
-			answers = append(answers, srcQ.Answer)
+			answers = append(answers, NormalizeAnswerLabel(srcQ.Answer))
 		}
 
 		state.Questions[idx] = Question{

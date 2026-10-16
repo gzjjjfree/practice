@@ -1233,12 +1233,55 @@ func applyTemplate(ws *AdminExamCreateState) {
 	if ws.durationEntry != nil {
 		ws.durationEntry.SetText(fmt.Sprintf("%d", ws.templateDetail.DurationMin))
 	}
+
+	bankCounts := make(map[string]int)
+	if ws.sourceTab == 0 {
+		for _, q := range ws.localQuestions {
+			bankCounts[q.Type]++
+		}
+	} else {
+		for _, sq := range ws.serverQuestions {
+			qLocal := serverQuestionToLocal(&sq)
+			bankCounts[qLocal.Type]++
+		}
+	}
+
+	singleCount := ws.templateDetail.SingleCount
+	if singleCount > bankCounts["单选题"] {
+		singleCount = bankCounts["单选题"]
+	}
+	multiCount := ws.templateDetail.MultiCount
+	if multiCount > bankCounts["多选题"] {
+		multiCount = bankCounts["多选题"]
+	}
+	judgeCount := ws.templateDetail.JudgeCount
+	if judgeCount > bankCounts["判断题"] {
+		judgeCount = bankCounts["判断题"]
+	}
+	blankCount := ws.templateDetail.BlankCount
+	if blankCount > bankCounts["填空题"] {
+		blankCount = bankCounts["填空题"]
+	}
+	essayCount := ws.templateDetail.EssayCount
+	if essayCount > bankCounts["问答题"] {
+		essayCount = bankCounts["问答题"]
+	}
+
+	if ws.typeCounts == nil {
+		ws.typeCounts = make(map[string]int)
+	}
+	ws.typeCounts["单选题"] = singleCount
+	ws.typeCounts["多选题"] = multiCount
+	ws.typeCounts["判断题"] = judgeCount
+	ws.typeCounts["填空题"] = blankCount
+	ws.typeCounts["问答题"] = essayCount
+
 	if ws.typeEntries != nil {
-		ws.typeEntries["单选题"].SetText(fmt.Sprintf("%d", ws.templateDetail.SingleCount))
-		ws.typeEntries["多选题"].SetText(fmt.Sprintf("%d", ws.templateDetail.MultiCount))
-		ws.typeEntries["判断题"].SetText(fmt.Sprintf("%d", ws.templateDetail.JudgeCount))
-		ws.typeEntries["填空题"].SetText(fmt.Sprintf("%d", ws.templateDetail.BlankCount))
-		ws.typeEntries["问答题"].SetText(fmt.Sprintf("%d", ws.templateDetail.EssayCount))
+		ws.typeEntries["单选题"].SetText(fmt.Sprintf("%d", singleCount))
+		ws.typeEntries["多选题"].SetText(fmt.Sprintf("%d", multiCount))
+		ws.typeEntries["判断题"].SetText(fmt.Sprintf("%d", judgeCount))
+		ws.typeEntries["填空题"].SetText(fmt.Sprintf("%d", blankCount))
+		ws.typeEntries["问答题"].SetText(fmt.Sprintf("%d", essayCount))
 	}
 	if ws.typeScoreEntries != nil {
 		for _, t := range []string{"单选题", "多选题", "判断题", "填空题", "问答题"} {
@@ -1354,6 +1397,18 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 	startRow := container.NewBorder(nil, nil, makeFormLabel(core.AdminStartTimeLabel), nil, container.NewHBox(ws.startTimeLbl, setTimeBtn(ws.startTimeLbl, 0)))
 	endRow := container.NewBorder(nil, nil, makeFormLabel(core.AdminEndTimeLabel), nil, container.NewHBox(ws.endTimeLbl, setTimeBtn(ws.endTimeLbl, 2*time.Hour)))
 
+	bankCounts := make(map[string]int)
+	if ws.sourceTab == 0 {
+		for _, q := range ws.localQuestions {
+			bankCounts[q.Type]++
+		}
+	} else {
+		for _, sq := range ws.serverQuestions {
+			qLocal := serverQuestionToLocal(&sq)
+			bankCounts[qLocal.Type]++
+		}
+	}
+
 	typeLabels := []string{"单选题", "多选题", "判断题", "填空题", "问答题"}
 	typeEntries := make(map[string]*widget.Entry)
 	typeScoreEntries := make(map[string]*widget.Entry)
@@ -1361,7 +1416,8 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 
 	for _, t := range typeLabels {
 		tName := t
-		label := widget.NewLabel(t)
+		maxCount := bankCounts[tName]
+		label := widget.NewLabel(fmt.Sprintf("%s (共%d题)", tName, maxCount))
 		label.TextStyle = fyne.TextStyle{Bold: true}
 
 		countEntry := widget.NewEntry()
@@ -1413,17 +1469,16 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 			compactScore,
 		)
 
-		typeCard := container.NewGridWrap(fyne.NewSize(280, core.TypeCardGridWrapHeight), itemBox)
+		typeCard := container.NewGridWrap(fyne.NewSize(390, core.TypeCardGridWrapHeight), itemBox)
 		typeCards = append(typeCards, typeCard)
 	}
 
 	ws.typeEntries = typeEntries
 	ws.typeScoreEntries = typeScoreEntries
 
-	typeGridFlow := container.NewGridWrap(fyne.NewSize(280, core.TypeCardGridWrapHeight), typeCards...)
 	typeCountsSection := container.NewVBox(
 		makeFormLabel(core.AdminTypeSettingsTitle),
-		typeGridFlow,
+		container.NewVBox(typeCards...),
 	)
 
 	templateBtn := buildTemplateSelectBtn(ws, state, w)
@@ -1470,6 +1525,18 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 			ws.startTimeStr = ws.startTimeLbl.Text
 			ws.endTimeStr = ws.endTimeLbl.Text
 
+			bankCounts := make(map[string]int)
+			if ws.sourceTab == 0 {
+				for _, q := range ws.localQuestions {
+					bankCounts[q.Type]++
+				}
+			} else {
+				for _, sq := range ws.serverQuestions {
+					qLocal := serverQuestionToLocal(&sq)
+					bankCounts[qLocal.Type]++
+				}
+			}
+
 			totalQuestions := 0
 			totalScore := 0.0
 			ws.typeCounts = make(map[string]int)
@@ -1482,6 +1549,13 @@ func buildExamParamsPage(ws *AdminExamCreateState, w fyne.Window, state *core.Ap
 				if val != "" {
 					count, _ = strconv.Atoi(val)
 				}
+
+				maxAvailable := bankCounts[t]
+				if count > maxAvailable {
+					customElements.ShowCustomInformation(core.AdminErrorText, fmt.Sprintf("【%s】设置的数量（%d）超过了题库来源中的总数量（%d）", t, count, maxAvailable), w)
+					return
+				}
+
 				ws.typeCounts[t] = count
 
 				scoreVal := typeScoreEntries[t].Text
@@ -2389,8 +2463,15 @@ func convertBankDataToQuestions(bankData *parser.BankData) []core.Question {
 
 		var answers []string
 		if q.Answer != "" {
-			for _, ch := range q.Answer {
-				answers = append(answers, string(ch))
+			cleanAns := strings.NewReplacer("、", "", ",", "", " ", "").Replace(q.Answer)
+			for _, ch := range cleanAns {
+				norm := core.NormalizeAnswerLabel(string(ch))
+				if norm != "" {
+					answers = append(answers, norm)
+				}
+			}
+			if len(answers) == 0 {
+				answers = append(answers, core.NormalizeAnswerLabel(q.Answer))
 			}
 		}
 
