@@ -454,7 +454,9 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 
 						if q.Type == "多选题" {
 							multiSelected[optIndex] = !multiSelected[optIndex]
-							refreshPracticeUI()
+							fyne.Do(func() {
+								refreshPracticeUI()
+							})
 						} else {
 							storageRelated.HandleUserSelectOption(state, q, optLetter)
 
@@ -466,7 +468,9 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 								state.AnswerGenCounter = currentGen
 								state.PracticeRecordsMu.Unlock()
 
-								refreshPracticeUI()
+								fyne.Do(func() {
+									refreshPracticeUI()
+								})
 
 								go func(gen int) {
 									time.Sleep(time.Duration(core.SingleCorrectDelay) * time.Millisecond)
@@ -492,7 +496,9 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 										singleCorrectClicked[cIdx] = true
 									}
 								}
-								refreshPracticeUI()
+								fyne.Do(func() {
+									refreshPracticeUI()
+								})
 							}
 						}
 					},
@@ -579,7 +585,9 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 				storageRelated.HandleUserSelectOption(state, q, userAnsStr) // 记录用户答案
 				multiSubmitted = true
 				isAllCorrect := core.IsAnswerCorrect(userAnsStr, q) // 判断答案是否正确
-				refreshPracticeUI()
+				fyne.Do(func() {
+					refreshPracticeUI()
+				})
 				if isAllCorrect {
 					// 1. 获取并递增生成号（加锁）
 					state.PracticeRecordsMu.Lock()

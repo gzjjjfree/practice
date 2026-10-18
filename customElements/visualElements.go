@@ -192,8 +192,8 @@ func CreateButton(
 		// 让 Label 撑满按钮宽度并正常折行，避免 NewCenter 导致单字换行崩溃
 		btnContent = container.NewStack(btnBg, themedText)
 	} else {
-		// 单行模式：使用带微调偏移（-1.5px）的垂直居中布局，完美解决文本光学中心偏下的视觉问题
-		btnContent = container.NewStack(btnBg, container.New(&verticalOffsetLayout{offsetY: -1.5}, themedText))
+		// 单行模式：使用 NewCenter 保证文字在按钮中水平与垂直双向完美居中
+		btnContent = container.NewStack(btnBg, container.NewCenter(themedText))
 	}
 
 	// 4. 处理按钮尺寸
