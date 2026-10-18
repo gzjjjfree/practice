@@ -284,16 +284,6 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 
 	listTitle := widget.NewLabelWithStyle("已存储的文件列表 (点击切换):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	topAndMiddleBox := container.NewVBox(
-		customElements.GetTitle(),
-		topLoginBar,
-		widget.NewSeparator(),
-		grid,
-		widget.NewSeparator(),
-		currentFileTitleLbl,
-		currentFileNameLbl,
-	)
-
 	fileListContainer := container.NewVBox()
 
 	// 1. 创建原生的 Scroll 容器
@@ -303,27 +293,30 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 	customTheme := &gz_theme.NoShadowTheme{Theme: theme.DefaultTheme()}
 	noShadowScrollWrapper := container.NewThemeOverride(scrollList, customTheme)
 
-	header := container.NewVBox(
+	homeContentBox := container.NewVBox(
+		customElements.GetTitle(),
+		topLoginBar,
+		widget.NewSeparator(),
+		grid,
+		widget.NewSeparator(),
+		currentFileTitleLbl,
+		currentFileNameLbl,
 		widget.NewSeparator(),
 		listTitle,
+		noShadowScrollWrapper,
 	)
-
-	// 3. 将 noShadowScrollWrapper 放在 Center (第五个参数)，使其自动向上/下填充剩余全部空间
-	bottomBox := container.NewBorder(header, nil, nil, nil, noShadowScrollWrapper)
 
 	bottomPadding := canvas.NewRectangle(color.Transparent)
 	bottomPadding.SetMinSize(fyne.NewSize(0, core.BottomPaddingHeight))
 
-	bottomWrapper := container.NewBorder(nil, bottomPadding, nil, nil, bottomBox)
-
-	mainLayout := container.NewBorder(topAndMiddleBox, bottomWrapper, nil, nil, layout.NewSpacer())
+	mainLayout := container.NewBorder(layout.NewSpacer(), bottomPadding, nil, nil, homeContentBox)
 
 	refreshHomeUI = func() {
 		fmt.Printf("[REFRESH_UI] START: state.StoredFiles=%v, len=%d\n", state.StoredFiles, len(state.StoredFiles))
 		updateTopLoginBar()
 
-		topAndMiddleBox.Objects[1] = topLoginBar
-		topAndMiddleBox.Refresh()
+		homeContentBox.Objects[1] = topLoginBar
+		homeContentBox.Refresh()
 
 		if state.CurrentFileName != "" {
 			currentFileNameLbl.SetText("📂 " + state.CurrentFileName)

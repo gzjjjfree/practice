@@ -33,6 +33,8 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 	var singleWrongClicked = make(map[int]bool)   // 单选题：错误点击的选项索引
 	var singleCorrectClicked = make(map[int]bool) // 单选题：正确点击的选项索引
 	var multiSubmitted bool                       // 多选题：是否已提交
+	var cachedStemQID string                      // 缓存题干的题目 ID
+	var cachedStemBox *fyne.Container             // 缓存的题干容器，防止同题刷新时跳动
 
 	// ========== 页面布局结构 ==========
 	// 页面分为上、中、下三个区域：顶部导航、中间题目内容、底部统计和操作
@@ -243,25 +245,32 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 			}
 		}
 
-		// --- 题干显示 ---
-		stemText := fmt.Sprintf("%d. %s", state.Index+1, q.Content)
-		stemLbl := widget.NewRichText(
-			&widget.TextSegment{
-				Style: widget.RichTextStyleSubHeading,
-				Text:  stemText,
-			},
-		)
-		stemLbl.Wrapping = fyne.TextWrapBreak // 支持文本自动换行
+		// --- 题干显示（带缓存，避免同题刷新时重新计算换行导致画面跳动）---
+		var stemBox *fyne.Container
+		if q.ID == cachedStemQID && cachedStemBox != nil {
+			stemBox = cachedStemBox
+		} else {
+			cachedStemQID = q.ID
+			stemText := fmt.Sprintf("%d. %s", state.Index+1, q.Content)
+			stemLbl := widget.NewRichText(
+				&widget.TextSegment{
+					Style: widget.RichTextStyleSubHeading,
+					Text:  stemText,
+				},
+			)
+			stemLbl.Wrapping = fyne.TextWrapBreak // 支持文本自动换行
 
-		ruler := widget.NewRichText(
-			&widget.TextSegment{
-				Style: widget.RichTextStyleSubHeading,
-				Text:  "第一行\n第二行\n第三行",
-			},
-		)
-		minHeightSpacer := canvas.NewRectangle(color.Transparent)
-		minHeightSpacer.SetMinSize(fyne.NewSize(1, ruler.MinSize().Height))
-		stemBox := container.NewStack(minHeightSpacer, stemLbl)
+			ruler := widget.NewRichText(
+				&widget.TextSegment{
+					Style: widget.RichTextStyleSubHeading,
+					Text:  "第一行\n第二行\n第三行",
+				},
+			)
+			minHeightSpacer := canvas.NewRectangle(color.Transparent)
+			minHeightSpacer.SetMinSize(fyne.NewSize(1, ruler.MinSize().Height))
+			stemBox = container.NewStack(minHeightSpacer, stemLbl)
+			cachedStemBox = stemBox
+		}
 
 		// --- 选项区域 ---
 		optionsBox := container.NewVBox()
