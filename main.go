@@ -1,9 +1,12 @@
 package main
 
 import (
+	"time"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 
+	"github.com/gzjjjfree/practice/androidutil"
 	"github.com/gzjjjfree/practice/core"
 	"github.com/gzjjjfree/practice/gz_theme"
 	storagerelated "github.com/gzjjjfree/practice/storageRelated"
@@ -16,6 +19,17 @@ import (
 // main 程序入口，初始化应用并启动首页。
 func main() {
 	a := app.NewWithID("com.gzjjjfree.practice")
+
+	a.Lifecycle().SetOnStarted(func() {
+		go func() {
+			androidutil.SetLightSystemBars()
+			time.Sleep(time.Second) // 启动时序竞争，延迟补一次
+			androidutil.SetLightSystemBars()
+		}()
+	})
+	a.Lifecycle().SetOnEnteredForeground(func() {
+		androidutil.SetLightSystemBars() // 旋转/配置变化后 fyne 会重置，进前台兜底
+	})
 
 	// 设置自定义存储目录（用于测试或特殊需求）
 	// storage.SetStorageDir("/path/to/custom/storage")

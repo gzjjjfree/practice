@@ -38,7 +38,7 @@ func (f *ForcedDarkTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVari
 	case theme.ColorNameSeparator:
 		return core.HexColor(core.BorderLightColor)
 	default:
-		return theme.DefaultTheme().Color(name, variant)
+		return theme.DefaultTheme().Color(name, theme.VariantLight)
 	}
 }
 
