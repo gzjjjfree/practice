@@ -192,8 +192,8 @@ func CreateButton(
 		// 让 Label 撑满按钮宽度并正常折行，避免 NewCenter 导致单字换行崩溃
 		btnContent = container.NewStack(btnBg, themedText)
 	} else {
-		// 单行模式：使用 NewCenter 保证文字在按钮中水平与垂直双向完美居中
-		btnContent = container.NewStack(btnBg, container.NewCenter(themedText))
+		// 单行模式：使用带微调偏移（-1.5px）的垂直居中布局，完美解决文本光学中心偏下的视觉问题
+		btnContent = container.NewStack(btnBg, container.New(&verticalOffsetLayout{offsetY: -1.5}, themedText))
 	}
 
 	// 4. 处理按钮尺寸
@@ -403,4 +403,28 @@ func (l *DynamicFixedSizeLayout) Layout(objects []fyne.CanvasObject, size fyne.S
 		// 依然放置在左上角 (0,0)，这样右侧就会自然空出 scrollbarWidth 的距离
 		o.Move(fyne.NewPos(0, 0))
 	}
+}
+
+// verticalOffsetLayout 支持垂直偏移微调的居中布局，用于解决单行按钮文字光学中心偏下的问题
+type verticalOffsetLayout struct {
+	offsetY float32
+}
+
+func (l *verticalOffsetLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) == 0 {
+		return fyne.NewSize(0, 0)
+	}
+	return objects[0].MinSize()
+}
+
+func (l *verticalOffsetLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	obj := objects[0]
+	minSize := obj.MinSize()
+	x := (size.Width - minSize.Width) / 2
+	y := (size.Height - minSize.Height) / 2 + l.offsetY
+	obj.Resize(minSize)
+	obj.Move(fyne.NewPos(x, y))
 }

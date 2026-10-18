@@ -426,10 +426,11 @@ func LoadSetFromLocal(state *core.AppState, suffix string) map[string]bool {
 	return resultSet
 }
 
-// LoadPracticeRecordsFromLocal loads ModeRecords from disk.
+// LoadPracticeRecordsFromLocal loads ModeRecords and ModeIndices from disk.
 func LoadPracticeRecordsFromLocal(state *core.AppState) {
 	if state.CurrentFileName == "" {
 		state.ModeRecords = make(map[string]map[string]string)
+		state.ModeIndices = make(map[string]int)
 		return
 	}
 
@@ -440,20 +441,41 @@ func LoadPracticeRecordsFromLocal(state *core.AppState) {
 	bytesData, err := os.ReadFile(absolutePath)
 	if err != nil {
 		state.ModeRecords = make(map[string]map[string]string)
+		state.ModeIndices = make(map[string]int)
 		return
 	}
 
-	err = json.Unmarshal(bytesData, &state.ModeRecords)
-	if err != nil {
-		fmt.Printf("[WARN] parse records %s failed: %v, using empty records\n", fileName, err)
-		state.ModeRecords = make(map[string]map[string]string)
-	} else if state.ModeRecords == nil {
-		state.ModeRecords = make(map[string]map[string]string)
+	var storageData PracticeStorageData
+	err = json.Unmarshal(bytesData, &storageData)
+	if err == nil && storageData.Records != nil {
+		state.ModeRecords = storageData.Records
+		if storageData.Indices != nil {
+			state.ModeIndices = storageData.Indices
+		} else {
+			state.ModeIndices = make(map[string]int)
+		}
+	} else {
+		// Fallback for old format (map[string]map[string]string)
+		var oldRecords map[string]map[string]string
+		err = json.Unmarshal(bytesData, &oldRecords)
+		if err != nil {
+			fmt.Printf("[WARN] parse records %s failed: %v, using empty records\n", fileName, err)
+			state.ModeRecords = make(map[string]map[string]string)
+		} else if oldRecords == nil {
+			state.ModeRecords = make(map[string]map[string]string)
+		} else {
+			state.ModeRecords = oldRecords
+		}
+		state.ModeIndices = make(map[string]int)
 	}
 
 	if state.Title != "" && state.ModeRecords[state.Title] != nil {
 		state.PracticeRecordsMu.Lock()
 		state.PracticeRecords = state.ModeRecords[state.Title]
 		state.PracticeRecordsMu.Unlock()
+	}
+
+	if state.Title != "" && state.ModeIndices != nil {
+		state.Index = state.ModeIndices[state.Title]
 	}
 }

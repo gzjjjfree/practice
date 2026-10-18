@@ -10,7 +10,11 @@ import (
 	"github.com/gzjjjfree/practice/core"
 )
 
-// SaveWrongSetToLocal saves the wrong-set as a JSON array of integers to a file.
+// PracticeStorageData bundles mode records and mode indices for JSON persistence.
+type PracticeStorageData struct {
+	Records map[string]map[string]string `json:"records"`
+	Indices map[string]int               `json:"indices"`
+}
 func SaveWrongSetToLocal(state *core.AppState) {
 	saveSetNoLock(state, "错题集", state.WrongSet)
 }
@@ -70,8 +74,21 @@ func HandleUserSelectOption(state *core.AppState, q core.Question, selectedAnswe
 			state.WrongSet[q.ID] = true
 		}
 	}
+	state.PracticeRecordsMu.Unlock()
 
-	// Copy ModeRecords for saving under lock, then unlock before I/O
+	SavePracticeProgress(state)
+}
+
+// SavePracticeProgress saves current mode records and mode index to disk.
+func SavePracticeProgress(state *core.AppState) {
+	state.PracticeRecordsMu.Lock()
+	if state.Title != "" {
+		if state.ModeIndices == nil {
+			state.ModeIndices = make(map[string]int)
+		}
+		state.ModeIndices[state.Title] = state.Index
+	}
+
 	var modeCopy map[string]map[string]string
 	if state.Title != "" && state.ModeRecords != nil {
 		modeCopy = make(map[string]map[string]string, len(state.ModeRecords))
@@ -83,24 +100,33 @@ func HandleUserSelectOption(state *core.AppState, q core.Question, selectedAnswe
 			modeCopy[k] = vCopy
 		}
 	}
+
+	indicesCopy := make(map[string]int, len(state.ModeIndices))
+	for k, v := range state.ModeIndices {
+		indicesCopy[k] = v
+	}
 	state.PracticeRecordsMu.Unlock()
 
-	// Save outside lock (I/O doesn't need the lock since we copied data above)
 	SaveWrongSetToLocal(state)
-	savePracticeRecordsNoLock(state, modeCopy)
+	savePracticeRecordsNoLock(state, modeCopy, indicesCopy)
 }
 
-// savePracticeRecordsNoLock writes ModeRecords data to disk without acquiring lock.
-func savePracticeRecordsNoLock(state *core.AppState, modeRecordsCopy map[string]map[string]string) {
+// savePracticeRecordsNoLock writes ModeRecords and ModeIndices data to disk without acquiring lock.
+func savePracticeRecordsNoLock(state *core.AppState, modeRecordsCopy map[string]map[string]string, modeIndicesCopy map[string]int) {
 	if state.CurrentFileName == "" {
 		return
+	}
+
+	data := PracticeStorageData{
+		Records: modeRecordsCopy,
+		Indices: modeIndicesCopy,
 	}
 
 	fileName := state.CurrentFileName + "_答题记录.json"
 	storageDir := GetStorageDir()
 	absolutePath := filepath.Join(storageDir, fileName)
 
-	bytesData, err := json.MarshalIndent(modeRecordsCopy, "", "  ")
+	bytesData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		fmt.Printf("[WARN] marshal records %s failed: %v\n", fileName, err)
 		return
@@ -121,6 +147,9 @@ func ClearPracticeRecords(state *core.AppState) {
 
 	if state.Title != "" && state.ModeRecords != nil {
 		delete(state.ModeRecords, state.Title)
+	}
+	if state.Title != "" && state.ModeIndices != nil {
+		delete(state.ModeIndices, state.Title)
 	}
 
 	fileName := state.CurrentFileName + "_答题记录.json"

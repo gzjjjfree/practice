@@ -53,6 +53,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 		func() {
 			if state.Index > 0 {
 				state.Index--
+				storageRelated.SavePracticeProgress(state)
 				refreshPracticeUI()
 			}
 		},
@@ -60,6 +61,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 		func() {
 			if state.Index < len(state.CurrentList)-1 {
 				state.Index++
+				storageRelated.SavePracticeProgress(state)
 				refreshPracticeUI()
 			}
 		},
@@ -472,6 +474,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 									skip := gen != state.AnswerGenCounter
 									if !skip && state.Index < len(state.CurrentList)-1 {
 										state.Index++
+										storageRelated.SavePracticeProgress(state)
 									}
 									state.PracticeRecordsMu.Unlock()
 
@@ -520,6 +523,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 					state.AnswerGenCounter++
 					state.Index--
 					state.PracticeRecordsMu.Unlock() // 解锁
+					storageRelated.SavePracticeProgress(state)
 					refreshPracticeUI()
 				} else {
 					state.PracticeRecordsMu.Unlock() // 条件不满足时也要解锁
@@ -542,6 +546,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 					state.AnswerGenCounter++
 					state.Index++
 					state.PracticeRecordsMu.Unlock() // 解锁
+					storageRelated.SavePracticeProgress(state)
 					refreshPracticeUI()
 				} else {
 					state.PracticeRecordsMu.Unlock() // 条件不满足时也要解锁
@@ -590,6 +595,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 						skip := gen != state.AnswerGenCounter
 						if !skip && state.Index < len(state.CurrentList)-1 {
 							state.Index++
+							storageRelated.SavePracticeProgress(state)
 						}
 						state.PracticeRecordsMu.Unlock()
 
@@ -922,6 +928,7 @@ func ShowQuestionModal(w fyne.Window, state *core.AppState, onNavigate func()) {
 				state.Index = idx
 				state.PracticeRecordsMu.Unlock()
 
+				storageRelated.SavePracticeProgress(state)
 				onNavigate()
 				if modal != nil {
 					modal.Hide()
