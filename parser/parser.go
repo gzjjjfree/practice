@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/shakinm/xlsReader/xls"
 	"github.com/xuri/excelize/v2"
@@ -569,70 +570,68 @@ func ExtractFileName(fullName string) string {
 
 // IsUTF8 checks whether the given byte slice is valid UTF-8.
 func IsUTF8(data []byte) bool {
-	i := 0
-	for i < len(data) {
-		if data[i] < 0x80 {
-			i++
-			continue
-		} else if data[i] >= 0xc0 && data[i] <= 0xdf {
-			if i+1 >= len(data) || data[i+1] < 0x80 || data[i+1] > 0xbf {
-				return false
-			}
-			i += 2
-			continue
-		} else if data[i] >= 0xe0 && data[i] <= 0xef {
-			if i+2 >= len(data) || data[i+1] < 0x80 || data[i+1] > 0xbf || data[i+2] < 0x80 || data[i+2] > 0xbf {
-				return false
-			}
-			i += 3
-			continue
-		} else if data[i] >= 0xf0 && data[i] <= 0xf7 {
-			if i+3 >= len(data) || data[i+1] < 0x80 || data[i+1] > 0xbf || data[i+2] < 0x80 || data[i+2] > 0xbf || data[i+3] < 0x80 || data[i+3] > 0xbf {
-				return false
-			}
-			i += 4
-			continue
-		}
-		return false
-	}
-	return true
+	return utf8.Valid(data)
 }
 
 func readTxtFileWithEncodingFix(rawBytes []byte) (string, error) {
-	if IsUTF8(rawBytes) {
+	// BOM detection for UTF-8
+	if bytes.HasPrefix(rawBytes, []byte{0xEF, 0xBB, 0xBF}) {
+		rawBytes = rawBytes[3:]
+	}
+
+	if utf8.Valid(rawBytes) {
 		return string(rawBytes), nil
 	}
 
+	// Try GBK decoding
 	reader := transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GBK.NewDecoder())
 	utf8Bytes, err := io.ReadAll(reader)
-	if err != nil {
-		reader2 := transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GB18030.NewDecoder())
-		utf8Bytes, err = io.ReadAll(reader2)
-		if err != nil {
-			return string(rawBytes), err
+	if err == nil {
+		s := string(utf8Bytes)
+		if !strings.ContainsRune(s, '\uFFFD') {
+			return s, nil
 		}
 	}
 
-	return string(utf8Bytes), nil
+	// Try GB18030 decoding
+	reader2 := transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GB18030.NewDecoder())
+	utf8Bytes2, err2 := io.ReadAll(reader2)
+	if err2 == nil {
+		return string(utf8Bytes2), nil
+	}
+
+	// Fallback
+	if err == nil {
+		return string(utf8Bytes), nil
+	}
+	return string(rawBytes), err
 }
 
 // FixEncodingBytes checks if bytes are valid UTF-8. If not, attempts GBK/GB18030 to UTF-8 conversion.
 func FixEncodingBytes(rawBytes []byte) []byte {
-	if IsUTF8(rawBytes) {
+	if utf8.Valid(rawBytes) {
 		return rawBytes
 	}
 
 	reader := transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GBK.NewDecoder())
 	utf8Bytes, err := io.ReadAll(reader)
-	if err != nil {
-		reader2 := transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GB18030.NewDecoder())
-		utf8Bytes, err = io.ReadAll(reader2)
-		if err != nil {
-			return rawBytes
+	if err == nil {
+		s := string(utf8Bytes)
+		if !strings.ContainsRune(s, '\uFFFD') {
+			return utf8Bytes
 		}
 	}
 
-	return utf8Bytes
+	reader2 := transform.NewReader(bytes.NewReader(rawBytes), simplifiedchinese.GB18030.NewDecoder())
+	utf8Bytes2, err2 := io.ReadAll(reader2)
+	if err2 == nil {
+		return utf8Bytes2
+	}
+
+	if err == nil {
+		return utf8Bytes
+	}
+	return rawBytes
 }
 
 // ConvertXlsToXlsxBytes converts legacy .xls bytes to .xlsx bytes.
@@ -662,7 +661,12 @@ func ConvertXlsToXlsxBytes(xlsBytes []byte) ([]byte, error) {
 				}
 
 				pos, _ := excelize.CoordinatesToCellName(j+1, i+1)
-				xlsxFile.SetCellValue(sheet.GetName(), pos, cell.GetString())
+				cellStr := cell.GetString()
+				// Only transcode if not valid UTF-8 or contains replacement chars
+				if !utf8.ValidString(cellStr) || strings.ContainsRune(cellStr, '\uFFFD') {
+					cellStr = string(FixEncodingBytes([]byte(cellStr)))
+				}
+				xlsxFile.SetCellValue(sheet.GetName(), pos, cellStr)
 			}
 		}
 	}

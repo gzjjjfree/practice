@@ -288,7 +288,10 @@ func showSuperAdminUpload(w fyne.Window, state *core.AppState, onUploaded func()
 				Banks:         banks,
 			}
 
+			loadingDial := customElements.ShowCustomLoading("上传题库", "正在上传", w)
+
 			state.ImportBanks(req, func(success bool, imported, failed int, errors []string, duplicates []string, msg string) {
+				loadingDial.Hide()
 				hasDuplicate := strings.Contains(strings.ToLower(msg), "already exist")
 
 				if hasDuplicate {
@@ -328,7 +331,9 @@ func showSuperAdminUpload(w fyne.Window, state *core.AppState, onUploaded func()
 										Banks:         banksOverwrite,
 									}
 
+									loadingDial2 := customElements.ShowCustomLoading("上传题库", "正在上传", w)
 									state.ImportBanks(reqOverwrite, func(success2 bool, imported2, failed2 int, errors2 []string, duplicates2 []string, msg2 string) {
+										loadingDial2.Hide()
 										if success2 {
 											customElements.ShowCustomInformation(core.BankManageSuccessMsgType, fmt.Sprintf(core.BankManageUploadCompleteMsg, imported2, failed2), w)
 											if onUploaded != nil {
@@ -1286,7 +1291,9 @@ func showPushBankDialog(w fyne.Window, state *core.AppState, displayName, ownerU
 //   - "覆盖"按钮 (core.BankManageOverwriteBtnText)：关闭对话框并覆盖本地已存在的同名题库文件。
 //   - "新建"按钮 (core.BankManageNewBtnText)：关闭对话框并以带时间戳的新名称保存题库文件，避免覆盖。
 func executeDownloadAndSave(w fyne.Window, state *core.AppState, bankID int, displayName string, onBack func()) {
+	loadingDial := customElements.ShowCustomLoading("下载题库", "正在下载", w)
 	state.DownloadBankDetail(bankID, func(success bool, detail *parser.BankData, msg string) {
+		loadingDial.Hide()
 		if !success {
 			customElements.ShowCustomInformation(core.BankManageErrorMsgType, msg, w)
 			return

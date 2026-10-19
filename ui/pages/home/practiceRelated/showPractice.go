@@ -695,7 +695,7 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 		// --- 底部操作按钮 ---
 		// 判断是否为考试详情页面
 		isExamDetailPage := strings.Contains(state.Title, "考试详情")
-		
+
 		returnTypeBtn := customElements.CreateButton(
 			core.PracticeReturnTypeBtnText, core.NavButtonWidth, core.NavButtonHeight,
 			core.HexColor(core.CardBgColor),
@@ -718,8 +718,8 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 			true,
 			isExamDetailPage ||
 				!strings.Contains(state.Title, "错题练习") &&
-				!strings.Contains(state.Title, "修正题目") &&
-				!strings.Contains(state.Title, "收藏练习"),
+					!strings.Contains(state.Title, "修正题目") &&
+					!strings.Contains(state.Title, "收藏练习"),
 			fyne.TextAlignCenter, // 👈 居中对齐
 			fyne.TextWrapOff,     // 👈 不换行
 			fyne.TextTruncateOff, // 👈 不换行（截断）
@@ -840,8 +840,22 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 					}, w)
 			})
 
-		actionGrid := container.NewGridWithColumns(3, returnTypeBtn, delCurrentDataBtn, delRecordBtn)
-		bottomArea := container.NewVBox(statsRow, actionGrid)
+		actSpacing1 := canvas.NewRectangle(color.Transparent)
+		actSpacing1.SetMinSize(fyne.NewSize(8, 1))
+		actSpacing2 := canvas.NewRectangle(color.Transparent)
+		actSpacing2.SetMinSize(fyne.NewSize(8, 1))
+		
+		actionRow := container.NewHBox(returnTypeBtn, actSpacing1, delCurrentDataBtn, actSpacing2, delRecordBtn)
+		
+		spacerLeft := canvas.NewRectangle(color.Transparent)
+		spacerLeft.SetMinSize(fyne.NewSize(16, 1))
+		spacerRight := canvas.NewRectangle(color.Transparent)
+		spacerRight.SetMinSize(fyne.NewSize(16, 1))
+		
+		actionPadded := container.NewBorder(nil, nil, spacerLeft, spacerRight, container.NewCenter(actionRow))
+		verticalGap := canvas.NewRectangle(color.Transparent)
+		verticalGap.SetMinSize(fyne.NewSize(1, 12))
+		bottomArea := container.NewVBox(statsRow, verticalGap, actionPadded)
 
 		// 统一更新各个 Shell 区域的内容
 		topShell.Objects = []fyne.CanvasObject{topArea}
@@ -926,8 +940,8 @@ func ShowQuestionModal(w fyne.Window, state *core.AppState, onNavigate func()) {
 		}
 
 		// 4. 创建按状态渲染颜色的按钮（注意允许换行 TextWrapWord）
-		lblText := fmt.Sprintf("%d\n%s", idx+1, shortType)
-		fmt.Println("Creating button for question index:", idx, "with label:", lblText, "bgColor:", bgColor, "borderColor:", borderColor)
+		// lblText := fmt.Sprintf("%d\n%s", idx+1, shortType)
+		// fmt.Println("Creating button for question index:", idx, "with label:", lblText, "bgColor:", bgColor, "borderColor:", borderColor)
 		box := customElements.CreateButton(
 			"", // 👈 不传文字，避免底层单行组件干扰
 			core.ModalGridItemSize, core.ModalGridItemSize,

@@ -580,3 +580,48 @@ func ShowTimePickerDialog(parent fyne.Window, defaultTime time.Time, onConfirm f
 func TimeResultToString(result TimePickerResult) string {
 	return result.Time.Format("2006-01-02 15:04")
 }
+
+// ShowCustomLoading 显示一个无按钮的加载/等待提示对话框（如"正在上传"、"正在下载"），防止用户重复操作。
+func ShowCustomLoading(title, message string, parent fyne.Window) dialog.Dialog {
+	var d dialog.Dialog
+
+	msgText := widget.NewRichText(&widget.TextSegment{
+		Text: message,
+		Style: widget.RichTextStyle{
+			SizeName:  theme.SizeNameSubHeadingText,
+			Alignment: fyne.TextAlignCenter,
+		},
+	})
+	msgText.Wrapping = fyne.TextWrapWord
+
+	content := container.NewVBox(
+		container.NewGridWrap(fyne.NewSize(1, core.DialogVerticalGap)),
+		container.NewCenter(msgText),
+		container.NewGridWrap(fyne.NewSize(1, core.DialogVerticalGap)),
+	)
+
+	minWidthBox := container.NewGridWrap(fyne.NewSize(core.DialogMinWidth, 1))
+
+	styledContent := container.NewStack(
+		minWidthBox,
+		container.NewPadded(content),
+	)
+
+	if parent != nil {
+		d = dialog.NewCustomWithoutButtons(title, styledContent, parent)
+		d.Show()
+	} else {
+		app := fyne.CurrentApp()
+		if app != nil {
+			win := app.NewWindow("")
+			win.Hide()
+			d = dialog.NewCustomWithoutButtons(title, styledContent, win)
+			d.Show()
+			return d
+		}
+		d = dialog.NewCustomWithoutButtons(title, styledContent, nil)
+		d.Show()
+	}
+	return d
+}
+
