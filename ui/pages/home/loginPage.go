@@ -204,7 +204,7 @@ func ShowLoginPage(w fyne.Window, state *core.AppState, backToHome func()) {
 		layout.NewSpacer(),
 	)
 
-	title := customElements.CreateLabel("📖 题库练习系统", core.HexColor(core.TextPrimaryColor), core.FontSizeHeading, true, true, false)
+	title := customElements.GetTitle()
 
 	// Main layout
 	mainContent := container.NewBorder(

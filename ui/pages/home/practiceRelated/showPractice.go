@@ -476,13 +476,17 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 									time.Sleep(time.Duration(core.SingleCorrectDelay) * time.Millisecond)
 									state.PracticeRecordsMu.Lock()
 									skip := gen != state.AnswerGenCounter
+									shouldAdvance := false
 									if !skip && state.Index < len(state.CurrentList)-1 {
 										state.Index++
-										storageRelated.SavePracticeProgress(state)
+										shouldAdvance = true
 									}
 									state.PracticeRecordsMu.Unlock()
 
 									if !skip {
+										if shouldAdvance {
+											storageRelated.SavePracticeProgress(state)
+										}
 										fyne.Do(func() {
 											refreshPracticeUI()
 										})
@@ -601,14 +605,18 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 						state.PracticeRecordsMu.Lock()
 						// 2. 校验生成号是否匹配（若用户在这期间点了上下题，此处会被置为 true）
 						skip := gen != state.AnswerGenCounter
+						shouldAdvance := false
 						if !skip && state.Index < len(state.CurrentList)-1 {
 							state.Index++
-							storageRelated.SavePracticeProgress(state)
+							shouldAdvance = true
 						}
 						state.PracticeRecordsMu.Unlock()
 
 						// 3. 只有未被跳过才刷新 UI
 						if !skip {
+							if shouldAdvance {
+								storageRelated.SavePracticeProgress(state)
+							}
 							fyne.Do(func() {
 								refreshPracticeUI()
 							})
@@ -837,17 +845,17 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 
 		// 统一更新各个 Shell 区域的内容
 		topShell.Objects = []fyne.CanvasObject{topArea}
-		fyne.Do(func() { topShell.Refresh() })
+		topShell.Refresh()
 		bottomShell.Objects = []fyne.CanvasObject{bottomArea}
-		fyne.Do(func() { bottomShell.Refresh() })
+		bottomShell.Refresh()
 
 		// 👈 [新增] 单独刷新并渲染被固定在底部的导航按钮
 		navShell.Objects = []fyne.CanvasObject{container.NewPadded(navGrid)}
-		fyne.Do(func() { navShell.Refresh() })
+		navShell.Refresh()
 
 		// 👈 [修改] 滚动区域的 Stack 仅存放纯粹的题目本身
 		centerShell.Objects = []fyne.CanvasObject{container.NewPadded(questionContent)}
-		fyne.Do(func() { centerShell.Refresh() })
+		centerShell.Refresh()
 	}
 
 	// 初始渲染

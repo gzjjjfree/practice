@@ -297,7 +297,15 @@ func (t *TouchInterceptor) DragEnd() {
 
 // GetTitle creates the top title bar showing the app title.
 func GetTitle() *fyne.Container {
-	appTitleText := canvas.NewText("📖 题库练习系统", core.HexColor(core.TextPrimaryColor))
+	version := fyne.CurrentApp().Metadata().Version
+	if version == "" {
+		version = "1.0.0"
+	}
+	versionStr := version
+	if !strings.HasPrefix(versionStr, "v") && !strings.HasPrefix(versionStr, "V") {
+		versionStr = "v" + versionStr
+	}
+	appTitleText := canvas.NewText("📖 题库练习系统 "+versionStr, core.HexColor(core.TextPrimaryColor))
 	appTitleText.TextSize = core.FontSizeHeading // Using constant instead of hardcoded 22
 	appTitleText.Alignment = fyne.TextAlignCenter
 

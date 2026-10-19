@@ -123,9 +123,17 @@ jobs:
 
       - name: Build macOS (ARM64)
         run: |
+          RAW_VERSION=${GITHUB_REF#refs/tags/}
+          if [[ $RAW_VERSION =~ ^v?[0-9] ]]; then
+            CLEAN_VERSION=$(echo $RAW_VERSION | sed 's/^v//')
+          else
+            CLEAN_VERSION="1.0.0"
+          fi
+          echo "Final App Version: $CLEAN_VERSION"
+
           # macOS 环境下直接使用 fyne package 编译 arm64
           # 如果需要发布，建议在此处进行签名
-          fyne package -os darwin -name Practice -icon Icon.png
+          fyne package -os darwin -name Practice -icon Icon.png --appVersion "$CLEAN_VERSION"
           # 压缩为 zip 方便下载
           zip -r Practice_macOS_arm64.zip Practice.app
 
