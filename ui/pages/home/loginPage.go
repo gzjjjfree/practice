@@ -64,6 +64,16 @@ func ShowLoginPage(w fyne.Window, state *core.AppState, backToHome func()) {
 		passwordInput,
 	)
 
+	// 记住密码与自动登录复选框
+	rememberCheck := widget.NewCheck("记住账号密码并自动登录", nil)
+	prefs := fyne.CurrentApp().Preferences()
+	rememberMe := prefs.Bool("RememberLogin")
+	if rememberMe {
+		rememberCheck.SetChecked(true)
+		usernameInput.SetText(prefs.String("SavedUsername"))
+		passwordInput.SetText(prefs.String("SavedPassword"))
+	}
+
 	// 登录按钮
 	var loginBtn *customElements.CustomButton
 
@@ -75,6 +85,17 @@ func ShowLoginPage(w fyne.Window, state *core.AppState, backToHome func()) {
 		if username == "" || password == "" {
 			customElements.ShowCustomInformation("提示", "请输入用户名和密码", w)
 			return
+		}
+
+		// 保存或清除偏好设置
+		if rememberCheck.Checked {
+			prefs.SetBool("RememberLogin", true)
+			prefs.SetString("SavedUsername", username)
+			prefs.SetString("SavedPassword", password)
+		} else {
+			prefs.SetBool("RememberLogin", false)
+			prefs.SetString("SavedUsername", "")
+			prefs.SetString("SavedPassword", "")
 		}
 
 		// 禁用登录按钮，防止因网络延迟导致的连续点击，并给予用户清晰的已点击视觉反馈
@@ -163,9 +184,32 @@ func ShowLoginPage(w fyne.Window, state *core.AppState, backToHome func()) {
 	formVBox := container.NewVBox(
 		formInputs,
 		btnGap,
+		rememberCheck,
+		btnGap,
 		btnContainer,
 		btnGap,
 	)
+
+	// 如果勾选了记住密码且有保存的账号密码，自动触发登录
+	if rememberMe && usernameInput.Text != "" && passwordInput.Text != "" {
+		if loginBtn != nil {
+			loginBtn.Disable()
+		}
+		go func() {
+			state.Login(usernameInput.Text, passwordInput.Text, func(success bool, msg string) {
+				fyne.Do(func() {
+					if success {
+						backToHome()
+					} else {
+						if loginBtn != nil {
+							loginBtn.Enable()
+						}
+						fmt.Printf("[AUTO_LOGIN] failed: %s\n", msg)
+					}
+				})
+			})
+		}()
+	}
 
 	// 标题与副标题之间间隔 (8px)
 	titleGap := canvas.NewRectangle(core.HexColor(core.CardBgColor))
