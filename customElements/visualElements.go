@@ -233,6 +233,39 @@ func CreateButton(
 	return btn
 }
 
+// NewPrimaryButton 创建主操作按钮（高亮/主要按钮）
+func NewPrimaryButton(text string, onTapped func()) *CustomButton {
+	return CreateButton(
+		text,
+		core.BtnAutoSizeWidth, core.ActionBtnHeight,
+		color.White, core.HexColor(core.BtnPrimaryBg), core.HexColor(core.BtnPrimaryBg),
+		core.StrokeThin, core.FontSizeBody, true, false,
+		fyne.TextAlignCenter, fyne.TextWrapOff, fyne.TextTruncateOff, onTapped,
+	)
+}
+
+// NewDangerButton 创建危险/删除操作按钮
+func NewDangerButton(text string, onTapped func()) *CustomButton {
+	return CreateButton(
+		text,
+		core.BtnAutoSizeWidth, core.ActionBtnHeight,
+		color.White, core.HexColor(core.ColorDeleteBtnBg), core.HexColor(core.ColorDeleteBtnBg),
+		core.StrokeThin, core.FontSizeBody, true, false,
+		fyne.TextAlignCenter, fyne.TextWrapOff, fyne.TextTruncateOff, onTapped,
+	)
+}
+
+// NewNormalButton 创建普通默认操作按钮
+func NewNormalButton(text string, onTapped func()) *CustomButton {
+	return CreateButton(
+		text,
+		core.BtnAutoSizeWidth, core.ActionBtnHeight,
+		core.HexColor(core.TextPrimaryColor), core.HexColor(core.CardBgColor), core.HexColor(core.BorderMediumColor),
+		core.StrokeThin, core.FontSizeBody, false, false,
+		fyne.TextAlignCenter, fyne.TextWrapOff, fyne.TextTruncateOff, onTapped,
+	)
+}
+
 func (b *CustomButton) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(b.container)
 }

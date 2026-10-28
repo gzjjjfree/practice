@@ -142,26 +142,74 @@ func handleServerErrorCode(err error, msgPrefix string, w fyne.Window) bool {
 	// 提取服务器返回的错误信息
 	errStr := err.Error()
 	serverMsg := ""
-	// 格式: "获取题库列表失败: 服务器错误信息"
-	if idx := strings.Index(errStr, " 失败: "); idx != -1 {
-		serverMsg = errStr[idx+4:]
-	} else if idx := strings.Index(errStr, " failed: "); idx != -1 {
-		serverMsg = errStr[idx+9:]
-	} else if idx := strings.Index(errStr, " 出错: "); idx != -1 {
-		serverMsg = errStr[idx+4:]
+	for _, prefix := range []string{" 失败: ", " failed: ", " 出错: "} {
+		if idx := strings.Index(errStr, prefix); idx != -1 {
+			serverMsg = errStr[idx+len(prefix):]
+			break
+		}
 	}
 
-	// 使用包级别的对话框函数（由初始化时设置）
-	if serverMsg != "" {
-		if showCustomConfirm != nil {
-			showCustomConfirm(msgPrefix, serverMsg, func(yes bool) {}, w)
+	if showCustomConfirm != nil {
+		msg := serverMsg
+		if msg == "" {
+			msg = "操作失败"
 		}
-	} else {
-		if showCustomConfirm != nil {
-			showCustomConfirm(msgPrefix, "操作失败", func(yes bool) {}, w)
-		}
+		showCustomConfirm(msgPrefix, msg, func(yes bool) {}, w)
 	}
 	return true
+}
+
+// HandleAPIError 统一处理 API 调用错误（全局错误提示规范）。
+// 规范：所有 API 调用失败时均调用此方法，内部优先检查是否为服务器返回的错误码（通过 handleServerErrorCode 弹窗提示），
+// 若不是则执行 failCallback 传入格式化的错误信息。
+// 返回 true 表示已由服务器错误弹窗处理完毕；返回 false 表示已执行 failCallback。
+func (state *AppState) HandleAPIError(err error, actionName string, failCallback func(errMsg string)) bool {
+	if err == nil {
+		return false
+	}
+	if handleServerErrorCode(err, actionName, state.Window) {
+		return true
+	}
+	if failCallback != nil {
+		failCallback(actionName + "失败: " + err.Error())
+	}
+	return false
+}
+
+// doAPIRequest 统一封装"调用 API + 错误处理 + 回调"的重复模式。
+// fn 执行真正的 API 调用并返回 (result, err)；err 为 nil 视为成功。
+// failCallback 在发生非服务器错误码时被触发（由 HandleAPIError 内部调用），用于向 UI 报告失败。
+// successCallback 在成功时被调用，传入 API 返回值 result。
+func doAPIRequest[T any](
+	state *AppState,
+	actionName string,
+	fn func() (T, error),
+	failCallback func(errMsg string),
+	successCallback func(result T),
+) {
+	result, err := fn()
+	if err != nil {
+		state.HandleAPIError(err, actionName, failCallback)
+		return
+	}
+	successCallback(result)
+}
+
+// doAPIRequestVoid 专用于只返回 error 的 API 调用（如创建/更新/删除类接口）。
+// 语义与 doAPIRequest 一致，仅省略返回值处理。
+func doAPIRequestVoid(
+	state *AppState,
+	actionName string,
+	fn func() error,
+	failCallback func(errMsg string),
+	successCallback func(),
+) {
+	err := fn()
+	if err != nil {
+		state.HandleAPIError(err, actionName, failCallback)
+		return
+	}
+	successCallback()
 }
 
 // showCustomConfirm 用于显示确认对话框的函数（由初始化时设置）
@@ -305,10 +353,9 @@ func (state *AppState) InitNetwork() {
 func (state *AppState) Login(username, password string, callback func(success bool, msg string)) {
 	data, err := state.APIClient.Login(username, password)
 	if err != nil {
-		if handleServerErrorCode(err, "登录", state.Window) {
+		if state.HandleAPIError(err, "登录", func(msg string) { callback(false, msg) }) {
 			return
 		}
-		callback(false, "登录失败: "+err.Error())
 		return
 	}
 
@@ -348,10 +395,9 @@ func (state *AppState) Logout(callback func(success bool, msg string)) {
 
 	// Clear saved token and refresh token
 	if err := state.TokenStorage.ClearToken(); err != nil {
-		if handleServerErrorCode(err, "退出登录", state.Window) {
+		if state.HandleAPIError(err, "退出登录", func(msg string) { callback(false, msg) }) {
 			return
 		}
-		callback(false, "退出登录失败: "+err.Error())
 		return
 	}
 
@@ -360,152 +406,112 @@ func (state *AppState) Logout(callback func(success bool, msg string)) {
 
 // FetchServerBankList retrieves available question banks from server.
 func (state *AppState) FetchServerBankList(callback func(success bool, banks []network.ServerBankItem, msg string)) {
-	banks, err := state.APIClient.FetchBankList()
-	if err != nil {
-		if handleServerErrorCode(err, "获取题库列表", state.Window) {
-			return
-		}
-		callback(false, nil, "获取题库列表失败: "+err.Error())
-		return
-	}
-
-	state.ServerBanks = banks
-	callback(true, banks, "获取成功")
+	doAPIRequest(state, "获取题库列表",
+		func() ([]network.ServerBankItem, error) { return state.APIClient.FetchBankList() },
+		func(msg string) { callback(false, nil, msg) },
+		func(banks []network.ServerBankItem) {
+			state.ServerBanks = banks
+			callback(true, banks, "获取成功")
+		},
+	)
 }
 
 // DownloadServerBank downloads a question bank from server.
 func (state *AppState) DownloadServerBank(bankID int, callback func(success bool, msg string)) {
-	bankData, err := state.APIClient.DownloadBank(bankID)
-	if err != nil {
-		if handleServerErrorCode(err, "下载题库", state.Window) {
-			return
-		}
-		callback(false, "下载题库失败: "+err.Error())
-		return
-	}
-
-	state.CurrentServerBank = bankData
-	callback(true, "题库下载成功")
+	doAPIRequest(state, "下载题库",
+		func() (*network.ServerBankData, error) { return state.APIClient.DownloadBank(bankID) },
+		func(msg string) { callback(false, msg) },
+		func(bankData *network.ServerBankData) {
+			state.CurrentServerBank = bankData
+			callback(true, "题库下载成功")
+		},
+	)
 }
 
 // DownloadServerBankForExam downloads a question bank from server for exam creation.
 func (state *AppState) DownloadServerBankForExam(bankID int, callback func(success bool, msg string)) {
-	bankData, err := state.APIClient.DownloadServerBankForExam(bankID)
-	if err != nil {
-		if handleServerErrorCode(err, "下载题库", state.Window) {
-			return
-		}
-		callback(false, "下载题库失败: "+err.Error())
-		return
-	}
-
-	state.CurrentServerBank = bankData
-	callback(true, "题库下载成功")
+	doAPIRequest(state, "下载题库",
+		func() (*network.ServerBankData, error) { return state.APIClient.DownloadServerBankForExam(bankID) },
+		func(msg string) { callback(false, msg) },
+		func(bankData *network.ServerBankData) {
+			state.CurrentServerBank = bankData
+			callback(true, "题库下载成功")
+		},
+	)
 }
 
 // ==================== 考试相关方法 ====================
 
 // CreateExamSession creates a new exam session.
 func (state *AppState) CreateExamSession(examTemplateID int, callback func(success bool, sessionID string, questions []network.ServerQuestion, msg string)) {
-	sessionData, err := state.APIClient.CreateExamSession(examTemplateID)
-	if err != nil {
-		if handleServerErrorCode(err, "创建考试", state.Window) {
-			return
-		}
-		callback(false, "", nil, "创建考试失败: "+err.Error())
-		return
-	}
-
-	state.ExamSessionID = sessionData.ExamSessionID
-	state.ExamAnswers = make(map[string]string)
-	callback(true, sessionData.ExamSessionID, sessionData.Questions, "考试已创建")
+	doAPIRequest(state, "创建考试",
+		func() (*network.ExamSessionData, error) { return state.APIClient.CreateExamSession(examTemplateID) },
+		func(msg string) { callback(false, "", nil, msg) },
+		func(sessionData *network.ExamSessionData) {
+			state.ExamSessionID = sessionData.ExamSessionID
+			state.ExamAnswers = make(map[string]string)
+			callback(true, sessionData.ExamSessionID, sessionData.Questions, "考试已创建")
+		},
+	)
 }
 
 // SubmitExamSubmission submits exam answers to server.
 func (state *AppState) SubmitExamSubmission(callback func(success bool, result *network.ExamResult, msg string)) {
-	result, err := state.APIClient.SubmitExam(state.ExamSessionID, state.ExamAnswers)
-	if err != nil {
-		if handleServerErrorCode(err, "提交考试", state.Window) {
-			return
-		}
-		callback(false, nil, "提交考试失败: "+err.Error())
-		return
-	}
-
-	callback(true, result, "考试提交成功")
+	doAPIRequest(state, "提交考试",
+		func() (*network.ExamResult, error) { return state.APIClient.SubmitExam(state.ExamSessionID, state.ExamAnswers) },
+		func(msg string) { callback(false, nil, msg) },
+		func(result *network.ExamResult) { callback(true, result, "考试提交成功") },
+	)
 }
 
 // UploadWrongSetToServer uploads wrong-set to server.
 func (state *AppState) UploadWrongSetToServer(wrongQuestions []network.WrongQuestionItem, callback func(success bool, msg string)) {
-	err := state.APIClient.UploadWrongSet(wrongQuestions)
-	if err != nil {
-		if handleServerErrorCode(err, "上传错题集", state.Window) {
-			return
-		}
-		callback(false, "上传错题集失败: "+err.Error())
-		return
-	}
-
-	callback(true, "错题集上传成功")
+	doAPIRequest(state, "上传错题集",
+		func() (error, error) { return nil, state.APIClient.UploadWrongSet(wrongQuestions) },
+		func(msg string) { callback(false, msg) },
+		func(_ error) { callback(true, "错题集上传成功") },
+	)
 }
 
 // ==================== 管理员推送考试相关方法 ====================
 
 // FetchAvailableUsers retrieves the list of users for exam push.
 func (state *AppState) FetchAvailableUsers(callback func(success bool, users []network.UserItem, msg string)) {
-	users, err := state.APIClient.FetchUserList()
-	if err != nil {
-		if handleServerErrorCode(err, "获取用户列表", state.Window) {
-			return
-		}
-		callback(false, nil, "获取用户列表失败: "+err.Error())
-		return
-	}
-
-	state.AvailableUsers = users
-	callback(true, users, "获取成功")
+	doAPIRequest(state, "获取用户列表",
+		func() ([]network.UserItem, error) { return state.APIClient.FetchUserList() },
+		func(msg string) { callback(false, nil, msg) },
+		func(users []network.UserItem) {
+			state.AvailableUsers = users
+			callback(true, users, "获取成功")
+		},
+	)
 }
 
 // CreateExamTemplate creates a new exam template.
 func (state *AppState) CreateExamTemplate(req network.CreateExamTemplateReq, callback func(success bool, templateID int, msg string)) {
-	template, err := state.APIClient.CreateExamTemplate(req)
-	if err != nil {
-		if handleServerErrorCode(err, "创建考试模板", state.Window) {
-			return
-		}
-		callback(false, 0, "创建考试模板失败: "+err.Error())
-		return
-	}
-
-	callback(true, template.TemplateID, "考试模板创建成功")
+	doAPIRequest(state, "创建考试模板",
+		func() (*network.ExamTemplateItem, error) { return state.APIClient.CreateExamTemplate(req) },
+		func(msg string) { callback(false, 0, msg) },
+		func(template *network.ExamTemplateItem) { callback(true, template.TemplateID, "考试模板创建成功") },
+	)
 }
 
 // PushExamToUsers pushes an exam to selected users.
 func (state *AppState) PushExamToUsers(templateID int, targetUserIDs []int, callback func(success bool, msg string)) {
-	err := state.APIClient.PushExam(templateID, targetUserIDs)
-	if err != nil {
-		if handleServerErrorCode(err, "推送考试", state.Window) {
-			return
-		}
-		callback(false, "推送考试失败: "+err.Error())
-		return
-	}
-
-	callback(true, "考试推送成功")
+	doAPIRequest(state, "推送考试",
+		func() (error, error) { return nil, state.APIClient.PushExam(templateID, targetUserIDs) },
+		func(msg string) { callback(false, msg) },
+		func(_ error) { callback(true, "考试推送成功") },
+	)
 }
 
 // CreateAndPushExam creates an exam template and pushes it to users in one call.
 func (state *AppState) CreateAndPushExam(req network.CreateAndPushReq, callback func(success bool, data *network.CreateAndPushData, msg string)) {
-	result, err := state.APIClient.CreateAndPushExam(req)
-	if err != nil {
-		if handleServerErrorCode(err, "创建并推送考试", state.Window) {
-			return
-		}
-		callback(false, nil, "创建并推送考试失败: "+err.Error())
-		return
-	}
-
-	callback(true, result, "考试创建并推送成功")
+	doAPIRequest(state, "创建并推送考试",
+		func() (*network.CreateAndPushData, error) { return state.APIClient.CreateAndPushExam(req) },
+		func(msg string) { callback(false, nil, msg) },
+		func(result *network.CreateAndPushData) { callback(true, result, "考试创建并推送成功") },
+	)
 }
 
 // ==================== 我的考试相关方法 ====================
@@ -514,10 +520,9 @@ func (state *AppState) CreateAndPushExam(req network.CreateAndPushReq, callback 
 func (state *AppState) LoadMyExams(callback func(success bool, exams []network.MyExamItem, msg string)) {
 	exams, err := state.APIClient.GetMyExams()
 	if err != nil {
-		if handleServerErrorCode(err, "获取我的考试", state.Window) {
+		if state.HandleAPIError(err, "获取我的考试", func(msg string) { callback(false, nil, msg) }) {
 			return
 		}
-		callback(false, nil, "获取我的考试失败: "+err.Error())
 		return
 	}
 
@@ -533,10 +538,9 @@ func (state *AppState) StartMyExam(examID int, callback func(success bool, sessi
 			callback(false, "", nil, "考试已超时")
 			return
 		}
-		if handleServerErrorCode(err, "开始考试", state.Window) {
+		if state.HandleAPIError(err, "开始考试", func(msg string) { callback(false, "", nil, msg) }) {
 			return
 		}
-		callback(false, "", nil, "开始考试失败: "+err.Error())
 		return
 	}
 
@@ -549,10 +553,9 @@ func (state *AppState) StartMyExam(examID int, callback func(success bool, sessi
 func (state *AppState) SubmitMyExamSubmission(callback func(success bool, result *network.ExamResult, msg string)) {
 	result, err := state.APIClient.SubmitMyExam(state.ExamSessionID, state.ExamAnswers)
 	if err != nil {
-		if handleServerErrorCode(err, "提交考试", state.Window) {
+		if state.HandleAPIError(err, "提交考试", func(msg string) { callback(false, nil, msg) }) {
 			return
 		}
-		callback(false, nil, "提交考试失败: "+err.Error())
 		return
 	}
 
@@ -565,10 +568,9 @@ func (state *AppState) SubmitMyExamSubmission(callback func(success bool, result
 func (state *AppState) RefreshToken(refreshToken string, callback func(success bool, token string, msg string)) {
 	data, err := state.APIClient.RefreshToken(refreshToken)
 	if err != nil {
-		if handleServerErrorCode(err, "刷新Token", state.Window) {
+		if state.HandleAPIError(err, "刷新Token", func(msg string) { callback(false, "", msg) }) {
 			return
 		}
-		callback(false, "", "刷新 Token 失败: "+err.Error())
 		return
 	}
 
@@ -597,92 +599,57 @@ func (state *AppState) RefreshTokenAuto(callback func(success bool, token string
 
 // FetchUsers retrieves the list of users with pagination.
 func (state *AppState) FetchUsers(limit, offset int, callback func(success bool, users []network.UserItem, total int, msg string)) {
-	fmt.Printf("[USER_MGMT] REQUEST: GET /api/v1/users?limit=%d&offset=%d\n", limit, offset)
-	users, total, err := state.APIClient.FetchUsers(limit, offset)
-	if err != nil {
-		fmt.Printf("[USER_MGMT] RESPONSE: error=%v\n", err)
-		if handleServerErrorCode(err, "获取用户列表", state.Window) {
-			return
-		}
-		callback(false, nil, 0, "获取用户列表失败: "+err.Error())
-		return
-	}
-	fmt.Printf("[USER_MGMT] RESPONSE: total=%d, users=%+v\n", total, users)
-	callback(true, users, total, "获取成功")
+	var total int
+	doAPIRequest(state, "获取用户列表",
+		func() ([]network.UserItem, error) {
+			users, t, err := state.APIClient.FetchUsers(limit, offset)
+			total = t
+			return users, err
+		},
+		func(msg string) { callback(false, nil, 0, msg) },
+		func(users []network.UserItem) { callback(true, users, total, "获取成功") },
+	)
 }
 
 // FetchAdmins retrieves the list of admins with pagination.
 func (state *AppState) FetchAdmins(limit, offset int, callback func(success bool, admins []network.UserItem, total int, msg string)) {
-	fmt.Printf("[USER_MGMT] REQUEST: GET /api/v1/admins?limit=%d&offset=%d\n", limit, offset)
-	admins, total, err := state.APIClient.FetchAdmins(limit, offset)
-	if err != nil {
-		fmt.Printf("[USER_MGMT] RESPONSE: error=%v\n", err)
-		if handleServerErrorCode(err, "获取管理员列表", state.Window) {
-			return
-		}
-		callback(false, nil, 0, "获取管理员列表失败: "+err.Error())
-		return
-	}
-	fmt.Printf("[USER_MGMT] RESPONSE: total=%d, admins=%+v\n", total, admins)
-	callback(true, admins, total, "获取成功")
+	var total int
+	doAPIRequest(state, "获取管理员列表",
+		func() ([]network.UserItem, error) {
+			admins, t, err := state.APIClient.FetchAdmins(limit, offset)
+			total = t
+			return admins, err
+		},
+		func(msg string) { callback(false, nil, 0, msg) },
+		func(admins []network.UserItem) { callback(true, admins, total, "获取成功") },
+	)
 }
 
 // CreateUser creates a new user.
 func (state *AppState) CreateUser(req network.CreateUserReq, callback func(success bool, user *network.UserItem, msg string)) {
-	fmt.Printf("[USER_MGMT] REQUEST: POST /api/v1/users, body={Username:%q, Password:%q, Role:%q}\n", req.Username, req.Password, req.Role)
-	user, err := state.APIClient.CreateUser(req)
-	if err != nil {
-		fmt.Printf("[USER_MGMT] RESPONSE: error=%v\n", err)
-		if handleServerErrorCode(err, "创建用户", state.Window) {
-			return
-		}
-		callback(false, nil, "创建用户失败: "+err.Error())
-		return
-	}
-	fmt.Printf("[USER_MGMT] RESPONSE: success, user=%+v\n", user)
-	callback(true, user, "用户创建成功")
+	doAPIRequest(state, "创建用户",
+		func() (*network.UserItem, error) { return state.APIClient.CreateUser(req) },
+		func(msg string) { callback(false, nil, msg) },
+		func(user *network.UserItem) { callback(true, user, "用户创建成功") },
+	)
 }
 
 // UpdateUser updates an existing user.
 func (state *AppState) UpdateUser(userID int, req network.UpdateUserReq, callback func(success bool, msg string)) {
-	var reqBody string
-	if req.Username != nil {
-		reqBody += fmt.Sprintf("Username:%q ", *req.Username)
-	}
-	if req.Password != nil {
-		reqBody += fmt.Sprintf("Password:%q ", *req.Password)
-	}
-	if req.Role != nil {
-		reqBody += fmt.Sprintf("Role:%q ", *req.Role)
-	}
-	fmt.Printf("[USER_MGMT] REQUEST: PUT /api/v1/users/%d, body={%s}\n", userID, reqBody)
-	err := state.APIClient.UpdateUser(userID, req)
-	if err != nil {
-		fmt.Printf("[USER_MGMT] RESPONSE: error=%v\n", err)
-		if handleServerErrorCode(err, "更新用户", state.Window) {
-			return
-		}
-		callback(false, "更新用户失败: "+err.Error())
-		return
-	}
-	fmt.Printf("[USER_MGMT] RESPONSE: success, userID=%d\n", userID)
-	callback(true, "用户更新成功")
+	doAPIRequestVoid(state, "更新用户",
+		func() error { return state.APIClient.UpdateUser(userID, req) },
+		func(msg string) { callback(false, msg) },
+		func() { callback(true, "用户更新成功") },
+	)
 }
 
 // DeleteUser deletes a user.
 func (state *AppState) DeleteUser(userID int, callback func(success bool, msg string)) {
-	fmt.Printf("[USER_MGMT] REQUEST: DELETE /api/v1/users/%d\n", userID)
-	err := state.APIClient.DeleteUser(userID)
-	if err != nil {
-		fmt.Printf("[USER_MGMT] RESPONSE: error=%v\n", err)
-		if handleServerErrorCode(err, "删除用户", state.Window) {
-			return
-		}
-		callback(false, "删除用户失败: "+err.Error())
-		return
-	}
-	fmt.Printf("[USER_MGMT] RESPONSE: success, userID=%d\n", userID)
-	callback(true, "用户删除成功")
+	doAPIRequestVoid(state, "删除用户",
+		func() error { return state.APIClient.DeleteUser(userID) },
+		func(msg string) { callback(false, msg) },
+		func() { callback(true, "用户删除成功") },
+	)
 }
 
 // ==================== 题库管理（增强） ====================
@@ -692,96 +659,70 @@ func (state *AppState) DeleteUser(userID int, callback func(success bool, msg st
 // to indicate duplicate banks. The duplicates parameter contains the names of duplicate banks.
 func (state *AppState) ImportBanks(req network.BankImportReq, callback func(success bool, imported, failed int, errors []string, duplicates []string, msg string)) {
 	result, msg, err := state.APIClient.ImportBanks(req)
-	fmt.Printf("[HELPER_IMPORT] result=%+v, msg=%q, err=%v\n", result, msg, err)
 	if err != nil {
-		// Always pass msg, errors and duplicates to callback, even when err is not nil,
-		// so the caller can check for "already exist" in msg.
 		var duplicates []string
 		var errors []string
 		if result != nil {
 			duplicates = result.Duplicates
 			errors = result.Errors
 		}
-		fmt.Printf("[HELPER_IMPORT] err != nil, calling callback with success=false, errors=%v, duplicates=%v, msg=%q\n", errors, duplicates, msg)
 		callback(false, 0, 0, errors, duplicates, msg)
 		return
 	}
 
-	fmt.Printf("[HELPER_IMPORT] success, calling callback with success=true\n")
 	callback(true, result.Imported, result.Failed, result.Errors, result.Duplicates, msg)
 }
 
 // FetchBanksByOwner retrieves the list of question banks by owner username.
 func (state *AppState) FetchBanksByOwner(owner string, callback func(success bool, banks []network.BankItem, total int, msg string)) {
-	fmt.Printf("[HELPER_FETCH_BANKS] FetchBanksByOwner called, owner=%s\n", owner)
-	banks, total, err := state.APIClient.FetchBanksByOwner(owner, "", 100, 0)
-	fmt.Printf("[HELPER_FETCH_BANKS] result: banks=%v, total=%d, err=%v\n", banks, total, err)
-	if err != nil {
-		fmt.Printf("[HELPER_FETCH_BANKS] hasServerErrorCode=%v\n", hasServerErrorCode(err))
-		if handleServerErrorCode(err, "获取题库列表", state.Window) {
-			return
-		}
-		callback(false, nil, 0, "获取题库列表失败: "+err.Error())
-		return
-	}
-
-	fmt.Printf("[HELPER_FETCH_BANKS] calling callback with success=true, banks count=%d\n", len(banks))
-	callback(true, banks, total, "获取成功")
+	var total int
+	doAPIRequest(state, "获取题库列表",
+		func() ([]network.BankItem, error) {
+			banks, t, err := state.APIClient.FetchBanksByOwner(owner, "", 100, 0)
+			total = t
+			return banks, err
+		},
+		func(msg string) { callback(false, nil, 0, msg) },
+		func(banks []network.BankItem) { callback(true, banks, total, "获取成功") },
+	)
 }
 
 // FetchMyBanks retrieves the current user's assigned question banks.
 func (state *AppState) FetchMyBanks(callback func(success bool, banks []network.MyBankItem, msg string)) {
-	banks, err := state.APIClient.FetchMyBanks()
-	if err != nil {
-		if handleServerErrorCode(err, "获取我的题库", state.Window) {
-			return
-		}
-		callback(false, nil, "获取我的题库失败: "+err.Error())
-		return
-	}
-
-	callback(true, banks, "获取成功")
+	doAPIRequest(state, "获取我的题库",
+		func() ([]network.MyBankItem, error) { return state.APIClient.FetchMyBanks() },
+		func(msg string) { callback(false, nil, msg) },
+		func(banks []network.MyBankItem) { callback(true, banks, "获取成功") },
+	)
 }
 
 // FetchAllUsers retrieves all users (admins + regular users).
 func (state *AppState) FetchAllUsers(callback func(success bool, users []network.UserItem, total int, msg string)) {
-	users, total, err := state.APIClient.FetchAllUsers(100, 0)
-	if err != nil {
-		fmt.Printf("[HELPER_FETCH_ALL_USERS] API 调用失败: %v\n", err)
-		if handleServerErrorCode(err, "获取所有用户", state.Window) {
-			return
-		}
-		callback(false, nil, 0, "获取所有用户失败: "+err.Error())
-		return
-	}
-
-	fmt.Printf("[HELPER_FETCH_ALL_USERS] 获取成功: total=%d, users=%+v\n", total, users)
-	callback(true, users, total, "获取成功")
+	var total int
+	doAPIRequest(state, "获取所有用户",
+		func() ([]network.UserItem, error) {
+			users, t, err := state.APIClient.FetchAllUsers(100, 0)
+			total = t
+			return users, err
+		},
+		func(msg string) { callback(false, nil, 0, msg) },
+		func(users []network.UserItem) { callback(true, users, total, "获取成功") },
+	)
 }
 
 // DownloadBankDetail retrieves the full detail of a question bank via /export endpoint.
 // The server returns data structurally identical to parser.BankData.
 func (state *AppState) DownloadBankDetail(bankID int, callback func(success bool, detail *parser.BankData, msg string)) {
-	detail, err := state.APIClient.DownloadBankDetail(bankID)
-	if err != nil {
-		if handleServerErrorCode(err, "下载题库详情", state.Window) {
-			return
-		}
-		callback(false, nil, "下载题库详情失败: "+err.Error())
-		return
-	}
-
-	callback(true, detail, "获取成功")
+	doAPIRequest(state, "下载题库详情",
+		func() (*parser.BankData, error) { return state.APIClient.DownloadBankDetail(bankID) },
+		func(msg string) { callback(false, nil, msg) },
+		func(detail *parser.BankData) { callback(true, detail, "获取成功") },
+	)
 }
 
 // PushBank pushes a question bank from one owner to another user.
 func (state *AppState) PushBank(displayName, ownerUsername string, targetUsernames []string, overwrite bool, callback func(success bool, pushed, updated int, conflict []string, msg string)) {
-	fmt.Printf("[HELPER_PUSH_BANK] ========== 开始推送题库 ==========\n")
-	fmt.Printf("[HELPER_PUSH_BANK] 输入参数: displayName=%q, ownerUsername=%q, targetUsernames=%v (len=%d), overwrite=%v\n",
-		displayName, ownerUsername, targetUsernames, len(targetUsernames), overwrite)
-
 	if len(targetUsernames) == 0 {
-		fmt.Printf("[HELPER_PUSH_BANK] 错误: 目标用户列表为空\n")
 		callback(false, 0, 0, nil, "目标用户列表不能为空")
 		return
 	}
@@ -792,220 +733,152 @@ func (state *AppState) PushBank(displayName, ownerUsername string, targetUsernam
 		TargetUsernames: targetUsernames,
 		Overwrite:       overwrite,
 	}
-	fmt.Printf("[HELPER_PUSH_BANK] 构造的请求: %+v\n", req)
 
 	result, err := state.APIClient.PushBank(req)
 	if err != nil {
-		fmt.Printf("[HELPER_PUSH_BANK] API 调用失败: %v\n", err)
-		if handleServerErrorCode(err, "推送题库", state.Window) {
+		if state.HandleAPIError(err, "推送题库", func(msg string) { callback(false, 0, 0, nil, msg) }) {
 			return
 		}
-		callback(false, 0, 0, nil, "推送题库失败: "+err.Error())
 		return
 	}
 
-	fmt.Printf("[HELPER_PUSH_BANK] 推送结果: success=true, pushed=%d, updated=%d, conflict=%v\n", result.Pushed, result.Updated, result.Conflict)
-	fmt.Printf("[HELPER_PUSH_BANK] ========== 推送题库结束 ==========\n")
 	callback(true, result.Pushed, result.Updated, result.Conflict, "推送成功")
 }
 
 // FetchBanksList retrieves the list of question banks with pagination and filters.
 func (state *AppState) FetchBanksList(bankName, category string, limit, offset int, callback func(success bool, banks []network.BankItem, total int, msg string)) {
-	banks, total, err := state.APIClient.FetchBanksList(bankName, category, limit, offset)
-	if err != nil {
-		if handleServerErrorCode(err, "获取题库列表", state.Window) {
-			return
-		}
-		callback(false, nil, 0, "获取题库列表失败: "+err.Error())
-		return
-	}
-
-	callback(true, banks, total, "获取成功")
+	var total int
+	doAPIRequest(state, "获取题库列表",
+		func() ([]network.BankItem, error) {
+			banks, t, err := state.APIClient.FetchBanksList(bankName, category, limit, offset)
+			total = t
+			return banks, err
+		},
+		func(msg string) { callback(false, nil, 0, msg) },
+		func(banks []network.BankItem) { callback(true, banks, total, "获取成功") },
+	)
 }
 
 // CreateBank creates a new question bank.
 func (state *AppState) CreateBank(req network.CreateBankReq, callback func(success bool, bankID int, msg string)) {
-	bankID, err := state.APIClient.CreateBank(req)
-	if err != nil {
-		if handleServerErrorCode(err, "创建题库", state.Window) {
-			return
-		}
-		callback(false, 0, "创建题库失败: "+err.Error())
-		return
-	}
-
-	callback(true, bankID, "题库创建成功")
+	doAPIRequest(state, "创建题库",
+		func() (int, error) { return state.APIClient.CreateBank(req) },
+		func(msg string) { callback(false, 0, msg) },
+		func(bankID int) { callback(true, bankID, "题库创建成功") },
+	)
 }
 
 // UpdateBank updates an existing question bank.
 func (state *AppState) UpdateBank(bankID int, req network.CreateBankReq, callback func(success bool, msg string)) {
-	err := state.APIClient.UpdateBank(bankID, req)
-	if err != nil {
-		if handleServerErrorCode(err, "更新题库", state.Window) {
-			return
-		}
-		callback(false, "更新题库失败: "+err.Error())
-		return
-	}
-
-	callback(true, "题库更新成功")
+	doAPIRequestVoid(state, "更新题库",
+		func() error { return state.APIClient.UpdateBank(bankID, req) },
+		func(msg string) { callback(false, msg) },
+		func() { callback(true, "题库更新成功") },
+	)
 }
 
 // DeleteBank deletes a question bank by display_name and owner_username.
 func (state *AppState) DeleteBank(displayName, ownerUsername string, callback func(success bool, msg string)) {
-	fmt.Printf("[HELPER_DELETE_BANK] REQUEST: displayName=%q, owner_username=%q\n", displayName, ownerUsername)
-	err := state.APIClient.DeleteBank(displayName, ownerUsername)
-	if err != nil {
-		fmt.Printf("[HELPER_DELETE_BANK] RESPONSE: error=%v\n", err)
-		if handleServerErrorCode(err, "删除题库", state.Window) {
-			return
-		}
-		callback(false, "删除题库失败: "+err.Error())
-		return
-	}
-
-	callback(true, "题库删除成功")
+	doAPIRequestVoid(state, "删除题库",
+		func() error { return state.APIClient.DeleteBank(displayName, ownerUsername) },
+		func(msg string) { callback(false, msg) },
+		func() { callback(true, "题库删除成功") },
+	)
 }
 
 // ==================== 题目管理 ====================
 
 // FetchQuestions retrieves the list of questions with pagination and filters.
 func (state *AppState) FetchQuestions(bankID int, content, questionType, difficulty string, limit, offset int, callback func(success bool, questions []network.QuestionItem, total int, msg string)) {
-	questions, total, err := state.APIClient.FetchQuestions(bankID, content, questionType, difficulty, limit, offset)
-	if err != nil {
-		if handleServerErrorCode(err, "获取题目列表", state.Window) {
-			return
-		}
-		callback(false, nil, 0, "获取题目列表失败: "+err.Error())
-		return
-	}
-
-	callback(true, questions, total, "获取成功")
+	var total int
+	doAPIRequest(state, "获取题目列表",
+		func() ([]network.QuestionItem, error) {
+			questions, t, err := state.APIClient.FetchQuestions(bankID, content, questionType, difficulty, limit, offset)
+			total = t
+			return questions, err
+		},
+		func(msg string) { callback(false, nil, 0, msg) },
+		func(questions []network.QuestionItem) { callback(true, questions, total, "获取成功") },
+	)
 }
 
 // CreateQuestion adds a new question to a bank.
 func (state *AppState) CreateQuestion(bankID int, req network.CreateQuestionReq, callback func(success bool, questionID int, msg string)) {
-	questionID, err := state.APIClient.CreateQuestion(bankID, req)
-	if err != nil {
-		if handleServerErrorCode(err, "创建题目", state.Window) {
-			return
-		}
-		callback(false, 0, "添加题目失败: "+err.Error())
-		return
-	}
-
-	callback(true, questionID, "题目添加成功")
+	doAPIRequest(state, "创建题目",
+		func() (int, error) { return state.APIClient.CreateQuestion(bankID, req) },
+		func(msg string) { callback(false, 0, msg) },
+		func(questionID int) { callback(true, questionID, "题目添加成功") },
+	)
 }
 
 // UpdateQuestion updates an existing question.
 func (state *AppState) UpdateQuestion(bankID, questionID int, req network.CreateQuestionReq, callback func(success bool, msg string)) {
-	err := state.APIClient.UpdateQuestion(bankID, questionID, req)
-	if err != nil {
-		if handleServerErrorCode(err, "更新题目", state.Window) {
-			return
-		}
-		callback(false, "更新题目失败: "+err.Error())
-		return
-	}
-
-	callback(true, "题目更新成功")
+	doAPIRequestVoid(state, "更新题目",
+		func() error { return state.APIClient.UpdateQuestion(bankID, questionID, req) },
+		func(msg string) { callback(false, msg) },
+		func() { callback(true, "题目更新成功") },
+	)
 }
 
 // DeleteQuestion deletes a question from a bank.
 func (state *AppState) DeleteQuestion(bankID, questionID int, callback func(success bool, msg string)) {
-	err := state.APIClient.DeleteQuestion(bankID, questionID)
-	if err != nil {
-		if handleServerErrorCode(err, "删除题目", state.Window) {
-			return
-		}
-		callback(false, "删除题目失败: "+err.Error())
-		return
-	}
-
-	callback(true, "题目删除成功")
+	doAPIRequestVoid(state, "删除题目",
+		func() error { return state.APIClient.DeleteQuestion(bankID, questionID) },
+		func(msg string) { callback(false, msg) },
+		func() { callback(true, "题目删除成功") },
+	)
 }
 
 // BatchImportQuestions batch imports questions to a bank.
 func (state *AppState) BatchImportQuestions(req network.BatchImportQuestionsReq, callback func(success bool, imported, failed int, errors []string, msg string)) {
-	result, err := state.APIClient.BatchImportQuestions(req)
-	if err != nil {
-		if handleServerErrorCode(err, "批量导入题目", state.Window) {
-			return
-		}
-		callback(false, 0, 0, nil, "批量导入题目失败: "+err.Error())
-		return
-	}
-
-	callback(true, result.Imported, result.Duplicates, result.Errors, "导入完成")
+	doAPIRequest(state, "批量导入题目",
+		func() (*network.ImportResult, error) { return state.APIClient.BatchImportQuestions(req) },
+		func(msg string) { callback(false, 0, 0, nil, msg) },
+		func(result *network.ImportResult) { callback(true, result.Imported, result.Duplicates, result.Errors, "导入完成") },
+	)
 }
 
 // ==================== 考试模板管理 ====================
 
 // FetchTemplates retrieves the list of exam templates with pagination.
 func (state *AppState) FetchTemplates(limit, offset int, callback func(success bool, templates []network.TemplateItem, total int, msg string)) {
-	templates, total, err := state.APIClient.FetchTemplates(limit, offset)
-	if err != nil {
-		if handleServerErrorCode(err, "获取模板列表", state.Window) {
-			return
-		}
-		callback(false, nil, 0, "获取考试模板列表失败: "+err.Error())
-		return
-	}
-
-	callback(true, templates, total, "获取成功")
+	var total int
+	doAPIRequest(state, "获取模板列表",
+		func() ([]network.TemplateItem, error) {
+			templates, t, err := state.APIClient.FetchTemplates(limit, offset)
+			total = t
+			return templates, err
+		},
+		func(msg string) { callback(false, nil, 0, msg) },
+		func(templates []network.TemplateItem) { callback(true, templates, total, "获取成功") },
+	)
 }
 
 // GetTemplateDetail retrieves the detail of an exam template including per-type question counts.
 func (state *AppState) GetTemplateDetail(templateID int, callback func(success bool, detail *network.TemplateDetailItem, msg string)) {
-	detail, err := state.APIClient.GetTemplateDetail(templateID)
-	if err != nil {
-		if handleServerErrorCode(err, "获取模板详情", state.Window) {
-			return
-		}
-		callback(false, nil, "获取模板详情失败: "+err.Error())
-		return
-	}
-
-	callback(true, detail, "获取成功")
+	doAPIRequest(state, "获取模板详情",
+		func() (*network.TemplateDetailItem, error) { return state.APIClient.GetTemplateDetail(templateID) },
+		func(msg string) { callback(false, nil, msg) },
+		func(detail *network.TemplateDetailItem) { callback(true, detail, "获取成功") },
+	)
 }
 
 // UpdateTemplate updates an existing exam template.
 func (state *AppState) UpdateTemplate(templateID int, req network.TemplateUpdateReq, callback func(success bool, msg string)) {
-	fmt.Printf("[HELPER_TEMPLATE_UPDATE] templateID=%d, exam_name=%s, duration=%d, single=%d, multi=%d, judge=%d, blank=%d, essay=%d\n",
-		templateID, req.ExamName, req.DurationMin,
-		ptrInt(req.SingleCount), ptrInt(req.MultiCount), ptrInt(req.JudgeCount), ptrInt(req.BlankCount), ptrInt(req.EssayCount))
-	err := state.APIClient.UpdateTemplate(templateID, req)
-	if err != nil {
-		if handleServerErrorCode(err, "更新模板", state.Window) {
-			return
-		}
-		callback(false, "更新考试模板失败: "+err.Error())
-		return
-	}
-
-	callback(true, "模板更新成功")
-}
-
-// ptrInt returns the int value of a pointer, or 0 if nil.
-func ptrInt(p *int) int {
-	if p == nil {
-		return 0
-	}
-	return *p
+	doAPIRequestVoid(state, "更新模板",
+		func() error { return state.APIClient.UpdateTemplate(templateID, req) },
+		func(msg string) { callback(false, msg) },
+		func() { callback(true, "模板更新成功") },
+	)
 }
 
 // DeleteTemplate deletes an exam template.
 func (state *AppState) DeleteTemplate(templateID int, callback func(success bool, msg string)) {
-	err := state.APIClient.DeleteTemplate(templateID)
-	if err != nil {
-		if handleServerErrorCode(err, "删除模板", state.Window) {
-			return
-		}
-		callback(false, "删除考试模板失败: "+err.Error())
-		return
-	}
-
-	callback(true, "模板删除成功")
+	doAPIRequestVoid(state, "删除模板",
+		func() error { return state.APIClient.DeleteTemplate(templateID) },
+		func(msg string) { callback(false, msg) },
+		func() { callback(true, "模板删除成功") },
+	)
 }
 
 // CancelExam cancels an exam.
@@ -1014,46 +887,36 @@ func (state *AppState) CancelExam(templateID int, cancelReason string, callback 
 		TemplateID:   templateID,
 		CancelReason: cancelReason,
 	}
-	data, err := state.APIClient.CancelExam(req)
-	if err != nil {
-		if handleServerErrorCode(err, "取消考试", state.Window) {
-			return
-		}
-		callback(false, 0, "取消考试失败: "+err.Error())
-		return
-	}
-
-	callback(true, data.AffectedCount, "考试取消成功，影响 "+fmt.Sprintf("%d", data.AffectedCount)+" 个用户")
+	doAPIRequest(state, "取消考试",
+		func() (*network.CancelData, error) { return state.APIClient.CancelExam(req) },
+		func(msg string) { callback(false, 0, msg) },
+		func(data *network.CancelData) { callback(true, data.AffectedCount, "考试取消成功，影响 "+fmt.Sprintf("%d", data.AffectedCount)+" 个用户") },
+	)
 }
 
 // ExportResults exports exam results.
 func (state *AppState) ExportResults(templateID, examID int, format string, callback func(success bool, results []network.ExportResultItem, msg string)) {
-	results, err := state.APIClient.ExportResults(templateID, examID, format)
-	if err != nil {
-		if handleServerErrorCode(err, "导出结果", state.Window) {
-			return
-		}
-		callback(false, nil, "导出考试结果失败: "+err.Error())
-		return
-	}
-
-	callback(true, results, "导出成功")
+	doAPIRequest(state, "导出结果",
+		func() ([]network.ExportResultItem, error) { return state.APIClient.ExportResults(templateID, examID, format) },
+		func(msg string) { callback(false, nil, msg) },
+		func(results []network.ExportResultItem) { callback(true, results, "导出成功") },
+	)
 }
 
 // ==================== 登录日志 ====================
 
 // LoadLoginLogs retrieves the login logs with pagination.
 func (state *AppState) LoadLoginLogs(limit, offset int, callback func(success bool, logs []network.LoginLogItem, total int, msg string)) {
-	logs, total, err := state.APIClient.LoadLoginLogs(limit, offset)
-	if err != nil {
-		if handleServerErrorCode(err, "获取登录日志", state.Window) {
-			return
-		}
-		callback(false, nil, 0, "获取登录日志失败: "+err.Error())
-		return
-	}
-
-	callback(true, logs, total, "获取成功")
+	var total int
+	doAPIRequest(state, "获取登录日志",
+		func() ([]network.LoginLogItem, error) {
+			logs, t, err := state.APIClient.LoadLoginLogs(limit, offset)
+			total = t
+			return logs, err
+		},
+		func(msg string) { callback(false, nil, 0, msg) },
+		func(logs []network.LoginLogItem) { callback(true, logs, total, "获取成功") },
+	)
 }
 
 // ==================== 暂停/恢复考试 ====================
@@ -1063,16 +926,11 @@ func (state *AppState) PauseExam(examSessionID string, callback func(success boo
 	req := network.PauseExamReq{
 		ExamSessionID: examSessionID,
 	}
-	data, err := state.APIClient.PauseExam(req)
-	if err != nil {
-		if handleServerErrorCode(err, "暂停考试", state.Window) {
-			return
-		}
-		callback(false, nil, "暂停考试失败: "+err.Error())
-		return
-	}
-
-	callback(true, data, "考试已暂停")
+	doAPIRequest(state, "暂停考试",
+		func() (*network.PauseResumeData, error) { return state.APIClient.PauseExam(req) },
+		func(msg string) { callback(false, nil, msg) },
+		func(data *network.PauseResumeData) { callback(true, data, "考试已暂停") },
+	)
 }
 
 // ResumeExam resumes a paused exam.
@@ -1080,30 +938,20 @@ func (state *AppState) ResumeExam(examSessionID string, callback func(success bo
 	req := network.PauseExamReq{
 		ExamSessionID: examSessionID,
 	}
-	data, err := state.APIClient.ResumeExam(req)
-	if err != nil {
-		if handleServerErrorCode(err, "恢复考试", state.Window) {
-			return
-		}
-		callback(false, nil, "恢复考试失败: "+err.Error())
-		return
-	}
-
-	callback(true, data, "考试已恢复")
+	doAPIRequest(state, "恢复考试",
+		func() (*network.PauseResumeData, error) { return state.APIClient.ResumeExam(req) },
+		func(msg string) { callback(false, nil, msg) },
+		func(data *network.PauseResumeData) { callback(true, data, "考试已恢复") },
+	)
 }
 
 // GetExamResult retrieves the detailed result of an exam.
 func (state *AppState) GetExamResult(sessionID string, callback func(success bool, result *network.ExamDetailResult, msg string)) {
-	result, err := state.APIClient.GetExamResult(sessionID)
-	if err != nil {
-		if handleServerErrorCode(err, "获取考试详情", state.Window) {
-			return
-		}
-		callback(false, nil, "获取考试详情失败: "+err.Error())
-		return
-	}
-
-	callback(true, result, "获取成功")
+	doAPIRequest(state, "获取考试详情",
+		func() (*network.ExamDetailResult, error) { return state.APIClient.GetExamResult(sessionID) },
+		func(msg string) { callback(false, nil, msg) },
+		func(result *network.ExamDetailResult) { callback(true, result, "获取成功") },
+	)
 }
 
 // SyncQuestionsToState converts parsed parser.BankData into the in-memory Question slice inside AppState.
@@ -1169,4 +1017,43 @@ func TruncateUsername(username string) string {
 		return username[:5] + "..."
 	}
 	return username
+}
+
+// ==================== 12. 响应式布局与屏幕尺寸检测 ====================
+
+// GetCanvasSize 获取窗口的当前画布尺寸，如果窗口为空或画布为空则返回默认尺寸 (400, 750)。
+func GetCanvasSize(w fyne.Window) fyne.Size {
+	if w != nil && w.Canvas() != nil {
+		size := w.Canvas().Size()
+		if size.Width > 0 && size.Height > 0 {
+			return size
+		}
+	}
+	return fyne.NewSize(400, 750)
+}
+
+// IsSmallScreen 检测当前窗口/屏幕是否为小屏幕（例如手机端或小分辨率窗口宽度 < 550 或高度 < 700）。
+func IsSmallScreen(w fyne.Window) bool {
+	size := GetCanvasSize(w)
+	return size.Width < 550 || size.Height < 700
+}
+
+// GetResponsiveWidth 根据窗口宽度计算响应式内容宽度（例如最大限制或边距适配）。
+func GetResponsiveWidth(w fyne.Window, maxAllowedWidth float32, margin float32) float32 {
+	canvasSize := GetCanvasSize(w)
+	width := canvasSize.Width - (margin * 2)
+	if width > maxAllowedWidth {
+		width = maxAllowedWidth
+	}
+	if width < 100 {
+		width = 100
+	}
+	return width
+}
+
+// SetupResponsiveWindow 设置窗口的自适应大小及响应式调整策略。
+func SetupResponsiveWindow(w fyne.Window, minWidth, minHeight float32) {
+	if w != nil {
+		w.Resize(fyne.NewSize(minWidth, minHeight))
+	}
 }

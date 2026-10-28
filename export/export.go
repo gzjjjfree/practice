@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -41,7 +42,9 @@ func ShowExportDialog(w fyne.Window, state *core.AppState) {
 			}
 
 			selectedFormat := formatRadio.Selected
-			ExecuteFileSave(w, state, selectedFormat)
+			time.AfterFunc(100*time.Millisecond, func() {
+				ExecuteFileSave(w, state, selectedFormat)
+			})
 			return true // Close the dialog after handling the export
 		}, w)
 }

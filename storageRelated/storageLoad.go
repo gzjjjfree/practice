@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,11 +26,10 @@ import (
 
 // RefreshLocalFilesList 扫描本地沙盒目录中的 .json 题库文件，更新已存储文件列表。
 func RefreshLocalFilesList(state *core.AppState) {
-	fmt.Printf("[REFRESH_FILES] START: storageDir=%q\n", GetStorageDir())
 	storageDir := GetStorageDir()
 	files, err := os.ReadDir(storageDir)
 	if err != nil {
-		fmt.Printf("[REFRESH_FILES] ReadDir error: %v\n", err)
+		slog.Warn("ReadDir failed", "dir", storageDir, "err", err)
 		return
 	}
 
@@ -40,12 +40,10 @@ func RefreshLocalFilesList(state *core.AppState) {
 
 	var fileList []FileInfo
 
-	fmt.Printf("[REFRESH_FILES] total files in dir: %d\n", len(files))
 	for _, f := range files {
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
 			// 屏蔽掉错题集和收藏集，防止它们作为独立题库被展示
 			if strings.Contains(f.Name(), "错题") || strings.Contains(f.Name(), "收藏") || strings.Contains(f.Name(), "答题记录") {
-				fmt.Printf("[REFRESH_FILES]   SKIP (reserved): %s\n", f.Name())
 				continue
 			}
 
@@ -55,21 +53,17 @@ func RefreshLocalFilesList(state *core.AppState) {
 			if !strings.HasPrefix(name, "xlsxData_") && !strings.HasPrefix(name, "xlsData_") &&
 				!strings.HasPrefix(name, "txtData_") && !strings.HasPrefix(name, "txtsData_") &&
 				!strings.HasPrefix(name, "jsonData_") {
-				fmt.Printf("[REFRESH_FILES]   SKIP (not a bank file): %s\n", f.Name())
 				continue
 			}
 			// 假设 key 格式为: 类型Data_文件名_时间戳
 			parts := strings.Split(name, "_")
-			fmt.Printf("[REFRESH_FILES]   FILE: name=%q, parts count=%d\n", name, len(parts))
 			if len(parts) >= 3 {
 				tsStr := parts[len(parts)-1]
 				ts, _ := strconv.ParseInt(tsStr, 10, 64)
 				fileList = append(fileList, FileInfo{Key: name, Timestamp: ts})
-				fmt.Printf("[REFRESH_FILES]   INCLUDED: Key=%q, Timestamp=%d\n", name, ts)
 			} else {
 				// No timestamp in filename (e.g., overwritten file like xlsxData_xxx.json)
 				// Use current time so it sorts correctly (treated as newest)
-				fmt.Printf("[REFRESH_FILES]   INCLUDED (no timestamp): Key=%q\n", name)
 				fileList = append(fileList, FileInfo{Key: name, Timestamp: time.Now().UnixNano() / int64(time.Millisecond)})
 			}
 		}
@@ -84,7 +78,6 @@ func RefreshLocalFilesList(state *core.AppState) {
 		finalKeys = append(finalKeys, fileList[i].Key)
 	}
 
-	fmt.Printf("[REFRESH_FILES] FINAL StoredFiles has %d keys: %v\n", len(finalKeys), finalKeys)
 	state.StoredFiles = finalKeys
 }
 
@@ -126,9 +119,37 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 		defer reader.Close()
 
 		originalFileName := reader.URI().Name()
-		fileBytes, readErr := io.ReadAll(reader)
+		if strings.TrimSpace(originalFileName) == "" {
+			customElements.ShowCustomInformation("文件名无效", "上传的文件名不能为空", w)
+			return
+		}
+
+		// 1. 文件类型白名单校验
+		ext := strings.ToLower(filepath.Ext(originalFileName))
+		allowedExts := map[string]bool{
+			".xlsx": true,
+			".xls":  true,
+			".txt":  true,
+			".json": true,
+		}
+		if !allowedExts[ext] {
+			customElements.ShowCustomInformation("文件类型不支持", fmt.Sprintf("不支持的文件类型 [%s]，仅支持 .xlsx, .xls, .txt, .json 格式的文件。", ext), w)
+			return
+		}
+
+		// 2. 文件大小限制 (最大 50MB)
+		const maxFileSize = 50 * 1024 * 1024 // 50MB
+		fileBytes, readErr := io.ReadAll(io.LimitReader(reader, maxFileSize+1))
 		if readErr != nil {
 			customElements.ShowCustomInformation("读取失败", fmt.Sprintf("无法读取文件 %s: %v", originalFileName, readErr), w)
+			return
+		}
+		if int64(len(fileBytes)) > maxFileSize {
+			customElements.ShowCustomInformation("文件过大", fmt.Sprintf("文件大小超过 50MB 限制（当前大小：%.2f MB）", float64(len(fileBytes))/(1024*1024)), w)
+			return
+		}
+		if len(fileBytes) == 0 {
+			customElements.ShowCustomInformation("文件为空", "上传的文件内容不能为空", w)
 			return
 		}
 
@@ -136,8 +157,8 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 		files, _ := os.ReadDir(storageDir)
 
 		// 搜寻重复旧文件
-		ext := filepath.Ext(originalFileName)
-		baseName := strings.TrimSuffix(originalFileName, ext)
+		fileExt := filepath.Ext(originalFileName)
+		baseName := strings.TrimSuffix(originalFileName, fileExt)
 		searchPatterns := []string{"_" + originalFileName + "_", "_" + baseName + "_", "_" + originalFileName}
 
 		var oldFileNames []string
@@ -357,40 +378,9 @@ func OverwriteExistingBankFiles(storageDir string, oldFileNames []string) error 
 
 // 辅助函数：显示同名覆盖/新增冲突弹窗（保留向后兼容）
 func showConflictDialog(w fyne.Window, fileName string, onChoice func(isNewAlias bool)) {
-	var confirmDialog dialog.Dialog
-
-	cancelBtn := widget.NewButton(" 取消 ", func() { confirmDialog.Hide() })
-
-	overwriteBtn := widget.NewButton(" 覆盖 ", func() {
-		confirmDialog.Hide()
-		onChoice(false)
+	ShowFileConflictDialog(w, fileName, func(choice ConflictResolutionChoice) {
+		onChoice(choice == ResolveNewAlias)
 	})
-	overwriteBtn.Importance = widget.DangerImportance
-
-	addBtn := widget.NewButton(" 新增 ", func() {
-		confirmDialog.Hide()
-		onChoice(true)
-	})
-	addBtn.Importance = widget.HighImportance
-
-	buttons := container.NewHBox(layout.NewSpacer(), cancelBtn, overwriteBtn, addBtn, layout.NewSpacer())
-	msgLbl := widget.NewLabel(fmt.Sprintf("题库列表中已存在名为【%s】的文件。\n\n请选择接下来的操作：", fileName))
-	msgLbl.Alignment = fyne.TextAlignCenter
-	msgLbl.Wrapping = fyne.TextWrapWord
-
-	content := container.NewVBox(
-		msgLbl,
-		container.NewGridWrap(fyne.NewSize(1, 20)),
-		container.NewPadded(container.NewCenter(buttons)),
-	)
-
-	styledContent := container.NewStack(
-		container.NewGridWrap(fyne.NewSize(300, 1)),
-		container.NewPadded(content),
-	)
-
-	confirmDialog = dialog.NewCustomWithoutButtons("文件已存在", styledContent, w)
-	confirmDialog.Show()
 }
 
 // LoadRecordsForCurrentBank loads both wrong set and favorite set for the current bank.
@@ -417,7 +407,7 @@ func LoadSetFromLocal(state *core.AppState, suffix string) map[string]bool {
 
 	var idList []int
 	if err := json.Unmarshal(bytesData, &idList); err != nil {
-		fmt.Printf("[WARN] parse %s failed, file may be corrupted: %v\n", fileName, err)
+		slog.Warn("parse file failed, file may be corrupted", "file", fileName, "err", err)
 	} else {
 		for _, id := range idList {
 			resultSet[strconv.Itoa(id)] = true
@@ -459,7 +449,7 @@ func LoadPracticeRecordsFromLocal(state *core.AppState) {
 		var oldRecords map[string]map[string]string
 		err = json.Unmarshal(bytesData, &oldRecords)
 		if err != nil {
-			fmt.Printf("[WARN] parse records %s failed: %v, using empty records\n", fileName, err)
+			slog.Warn("parse records failed, using empty records", "file", fileName, "err", err)
 			state.ModeRecords = make(map[string]map[string]string)
 		} else if oldRecords == nil {
 			state.ModeRecords = make(map[string]map[string]string)

@@ -2,12 +2,15 @@ package network
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gzjjjfree/practice/parser"
@@ -17,10 +20,92 @@ import (
 // All API paths use the /api/v1/ prefix per FRONTEND_API_GUIDE.md.
 const BaseURL = "https://144.34.181.64:8443/api/v1"
 
+type cacheItem struct {
+	key       string
+	body      []byte
+	timestamp time.Time
+}
+
+type lruCache struct {
+	capacity  int
+	items     map[string]*list.Element
+	evictList *list.List
+	mu        sync.Mutex
+	ttl       time.Duration
+}
+
+func newLRUCache(capacity int, ttl time.Duration) *lruCache {
+	return &lruCache{
+		capacity:  capacity,
+		items:     make(map[string]*list.Element),
+		evictList: list.New(),
+		ttl:       ttl,
+	}
+}
+
+func (c *lruCache) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if elem, exists := c.items[key]; exists {
+		item := elem.Value.(*cacheItem)
+		if time.Since(item.timestamp) > c.ttl {
+			c.evictList.Remove(elem)
+			delete(c.items, key)
+			return nil, false
+		}
+		c.evictList.MoveToFront(elem)
+		return item.body, true
+	}
+	return nil, false
+}
+
+func (c *lruCache) put(key string, body []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if elem, exists := c.items[key]; exists {
+		c.evictList.MoveToFront(elem)
+		item := elem.Value.(*cacheItem)
+		item.body = body
+		item.timestamp = time.Now()
+		return
+	}
+
+	if c.evictList.Len() >= c.capacity {
+		oldest := c.evictList.Back()
+		if oldest != nil {
+			c.evictList.Remove(oldest)
+			item := oldest.Value.(*cacheItem)
+			delete(c.items, item.key)
+		}
+	}
+
+	item := &cacheItem{key: key, body: body, timestamp: time.Now()}
+	elem := c.evictList.PushFront(item)
+	c.items[key] = elem
+}
+
+func (c *lruCache) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]*list.Element)
+	c.evictList.Init()
+}
+
+type inFlightCall struct {
+	wg  sync.WaitGroup
+	val []byte
+	err error
+}
+
 // APIClient holds the HTTP client and auth state.
 type APIClient struct {
-	client *http.Client
-	token  string
+	client     *http.Client
+	token      string
+	cache      *lruCache
+	inFlight   map[string]*inFlightCall
+	inFlightMu sync.Mutex
 }
 
 // NewAPIClient creates a new API client with explicit timeout and safe transport.
@@ -36,9 +121,11 @@ func NewAPIClient() *APIClient {
 	return &APIClient{
 		client: &http.Client{
 			Transport: transport,
-			Timeout:   30 * time.Second, // 30s request timeout to avoid infinite hangs
+			Timeout:   15 * time.Second, // 15s request timeout per optimization requirement
 		},
-		token: "",
+		token:    "",
+		cache:    newLRUCache(100, 30*time.Second), // LRU cache capacity 100, TTL 30s
+		inFlight: make(map[string]*inFlightCall),
 	}
 }
 
@@ -54,48 +141,141 @@ func (c *APIClient) GetToken() string {
 
 // doRequest performs an HTTP request with JSON body and returns parsed response.
 // Accepts all 2xx success status codes (200 OK, 201 Created, etc.).
+// Includes retry mechanism for transient network or server errors, LRU caching, and request deduplication.
 func (c *APIClient) doRequest(method, endpoint string, reqBody, respBody interface{}) error {
-	var req *http.Request
+	var reqBodyBytes []byte
 	var err error
 
 	if reqBody != nil {
-		bodyBytes, err := json.Marshal(reqBody)
+		reqBodyBytes, err = json.Marshal(reqBody)
 		if err != nil {
-			return fmt.Errorf("failed to marshal request body: %w", err)
-		}
-		req, err = http.NewRequest(method, BaseURL+endpoint, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-	} else {
-		req, err = http.NewRequest(method, BaseURL+endpoint, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
+			return newParseError("request body", err)
 		}
 	}
 
-	// Always send Authorization header — server requires it for all requests (including login).
-	// When token is empty, send empty Bearer to satisfy server's header check.
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	cacheKey := fmt.Sprintf("%s:%s:%s", method, endpoint, string(reqBodyBytes))
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("network error: %w", err)
+	if method == "GET" {
+		if cached, ok := c.cache.get(cacheKey); ok {
+			if respBody != nil {
+				return json.Unmarshal(cached, respBody)
+			}
+			return nil
+		}
+
+		c.inFlightMu.Lock()
+		if c.inFlight == nil {
+			c.inFlight = make(map[string]*inFlightCall)
+		}
+		if call, exists := c.inFlight[cacheKey]; exists {
+			c.inFlightMu.Unlock()
+			call.wg.Wait()
+			if call.err != nil {
+				return call.err
+			}
+			if respBody != nil && len(call.val) > 0 {
+				return json.Unmarshal(call.val, respBody)
+			}
+			return nil
+		}
+		call := &inFlightCall{}
+		call.wg.Add(1)
+		c.inFlight[cacheKey] = call
+		c.inFlightMu.Unlock()
+
+		defer func() {
+			c.inFlightMu.Lock()
+			delete(c.inFlight, cacheKey)
+			call.err = err
+			if err == nil {
+				call.val = reqBodyBytes // temporary placeholder or we store resp body bytes below
+			}
+			c.inFlightMu.Unlock()
+			call.wg.Done()
+		}()
+	} else {
+		if c.cache != nil {
+			c.cache.clear()
+		}
+	}
+
+	startTime := time.Now()
+	maxRetries := 3
+	var resp *http.Response
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		var req *http.Request
+		if reqBodyBytes != nil {
+			req, err = http.NewRequest(method, BaseURL+endpoint, bytes.NewReader(reqBodyBytes))
+			if err != nil {
+				duration := time.Since(startTime)
+				slog.Error("failed to create request", "endpoint", endpoint, "duration", duration, "err", err)
+				return newParseError("request body", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+		} else {
+			req, err = http.NewRequest(method, BaseURL+endpoint, nil)
+			if err != nil {
+				duration := time.Since(startTime)
+				slog.Error("failed to create request", "endpoint", endpoint, "duration", duration, "err", err)
+				return newParseError("request body", err)
+			}
+		}
+
+		// Always send Authorization header — server requires it for all requests (including login).
+		// When token is empty, send empty Bearer to satisfy server's header check.
+		req.Header.Set("Authorization", "Bearer "+c.token)
+
+		resp, err = c.client.Do(req)
+		if err != nil {
+			if attempt < maxRetries {
+				slog.Debug("network error, retrying", "endpoint", endpoint, "attempt", attempt, "maxRetries", maxRetries, "err", err)
+				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+				continue
+			}
+			duration := time.Since(startTime)
+			slog.Error("network error after retries", "endpoint", endpoint, "duration", duration, "err", err)
+			return newNetworkError(endpoint, err)
+		}
+
+		// Retry on 5xx server errors
+		if resp.StatusCode >= 500 && attempt < maxRetries {
+			resp.Body.Close()
+			slog.Debug("server error, retrying", "endpoint", endpoint, "status", resp.StatusCode, "attempt", attempt)
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+			continue
+		}
+
+		break
 	}
 	defer resp.Body.Close()
+	duration := time.Since(startTime)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		slog.Info("HTTP request succeeded", "endpoint", endpoint, "status", resp.StatusCode, "duration", duration)
+	} else {
+		slog.Warn("HTTP request returned non-2xx status", "endpoint", endpoint, "status", resp.StatusCode, "duration", duration)
+	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %w", err)
+		return newParseError(endpoint, err)
 	}
 	bodyBytes = parser.FixEncodingBytes(bodyBytes)
 
 	// Accept all 2xx success codes (200 OK, 201 Created, etc.).
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if method == "GET" && c.cache != nil {
+			c.cache.put(cacheKey, bodyBytes)
+			// Also update inFlight call.val if it exists
+			c.inFlightMu.Lock()
+			if call, exists := c.inFlight[cacheKey]; exists {
+				call.val = bodyBytes
+			}
+			c.inFlightMu.Unlock()
+		}
 		if respBody != nil {
 			if err := json.Unmarshal(bodyBytes, respBody); err != nil {
-				return fmt.Errorf("failed to parse response: %w", err)
+				return newParseError(endpoint, err)
 			}
 		}
 		return nil
@@ -141,9 +321,11 @@ func (c *APIClient) doRequest(method, endpoint string, reqBody, respBody interfa
 				json.Unmarshal(dataBytes, respBody)
 			}
 		}
-		return fmt.Errorf("%s", errMsg)
+		// 服务器业务错误（code != 0）：统一包装，保持 "<action> failed: <msg>" 格式以兼容既有解析逻辑。
+		return newServerCodeError(endpoint, apiErr.Code, errMsg)
 	}
-	return fmt.Errorf("HTTP %d", resp.StatusCode)
+	// 非 2xx 且无法解析为 JSON：返回 HTTP 状态码错误（5xx/429/408 可重试）。
+	return newHTTPStatusError(endpoint, resp.StatusCode, bodyStr)
 }
 
 // Login performs user login.
@@ -159,7 +341,7 @@ func (c *APIClient) Login(username, password string) (*LoginData, error) {
 		return nil, err
 	}
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("login failed: %s", resp.Msg)
+		return nil, newServerCodeError("/auth/login", resp.Code, resp.Msg)
 	}
 	data := &resp.Data
 	c.token = data.Token
@@ -178,7 +360,7 @@ func (c *APIClient) Logout() error {
 	}
 
 	if resp.Code != 0 {
-		return fmt.Errorf("logout failed: %s", resp.Msg)
+		return newServerCodeError("/auth/logout", resp.Code, resp.Msg)
 	}
 
 	c.token = ""
@@ -194,7 +376,7 @@ func (c *APIClient) FetchBankList() ([]ServerBankItem, error) {
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("fetch bank list failed: %s", resp.Msg)
+		return nil, newServerCodeError("/banks", resp.Code, resp.Msg)
 	}
 
 	return resp.Data, nil
@@ -212,67 +394,70 @@ func (c *APIClient) DownloadBank(bankID int) (*ServerBankData, error) {
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("download bank failed: %s", resp.Msg)
+		return nil, newServerCodeError(fmt.Sprintf("/banks/%d", req.BankID), resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
 }
 
-// DownloadServerBankForExam downloads a complete question bank from server for exam creation.
-// This uses the /banks/{bank_id}/export endpoint which returns ServerBankData format.
-func (c *APIClient) DownloadServerBankForExam(bankID int) (*ServerBankData, error) {
-	fmt.Printf("[API_DOWNLOAD_SERVER_BANK] REQUEST: GET /banks/%d/export\n", bankID)
-
-	type RawResp struct {
-		Code int             `json:"code"`
-		Msg  string          `json:"msg"`
-		Data json.RawMessage `json:"data"`
-	}
-	var raw RawResp
-
+// fetchBankExportRaw performs the shared GET /banks/{bank_id}/export request:
+// it issues the authenticated HTTP call, validates the non-2xx status, unmarshals
+// the outer {code,msg,data} envelope and checks the business code. The raw `data`
+// payload is returned to the caller for typed decoding (ServerBankData vs parser.BankData).
+func (c *APIClient) fetchBankExportRaw(bankID int) (json.RawMessage, error) {
 	endpoint := fmt.Sprintf("/banks/%d/export", bankID)
 	req, _ := http.NewRequest("GET", BaseURL+endpoint, nil)
 	req.Header.Set("Authorization", "Bearer "+c.token)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		fmt.Printf("[API_DOWNLOAD_SERVER_BANK] HTTP request error: %v\n", err)
-		return nil, err
+		slog.Warn("bank export request failed", "endpoint", endpoint, "err", err)
+		return nil, newNetworkError(endpoint, err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	fmt.Printf("[API_DOWNLOAD_SERVER_BANK] HTTP status=%d, body=%s\n", resp.StatusCode, string(bodyBytes))
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var apiErr struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		json.Unmarshal(bodyBytes, &apiErr)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiErr.Msg)
+	if err := checkNon2xx(endpoint, resp.StatusCode, bodyBytes); err != nil {
+		return nil, err
 	}
 
-	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
-		fmt.Printf("[API_DOWNLOAD_SERVER_BANK] JSON unmarshal error: %v\n", err)
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	type envelope struct {
+		Code int             `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+	var env envelope
+	if err := json.Unmarshal(bodyBytes, &env); err != nil {
+		slog.Error("bank export response parse failed", "endpoint", endpoint, "err", err)
+		return nil, newParseError(endpoint, err)
 	}
 
-	if raw.Code != 0 {
-		return nil, fmt.Errorf("download bank failed: %s", raw.Msg)
+	if env.Code != 0 {
+		return nil, newServerCodeError(endpoint, env.Code, env.Msg)
 	}
 
-	fmt.Printf("[API_DOWNLOAD_SERVER_BANK] raw.Data = %s\n", string(raw.Data))
+	return env.Data, nil
+}
+
+// DownloadServerBankForExam downloads a complete question bank from server for exam creation.
+// This uses the /banks/{bank_id}/export endpoint which returns ServerBankData format.
+func (c *APIClient) DownloadServerBankForExam(bankID int) (*ServerBankData, error) {
+	endpoint := fmt.Sprintf("/banks/%d/export", bankID)
+
+	rawData, err := c.fetchBankExportRaw(bankID)
+	if err != nil {
+		return nil, err
+	}
 
 	// The /export endpoint returns data that is structurally identical to ServerBankData (bank_id/display_name/questions).
 	var sbd ServerBankData
-	if err := json.Unmarshal(raw.Data, &sbd); err != nil {
-		fmt.Printf("[API_DOWNLOAD_SERVER_BANK] ServerBankData unmarshal error: %v\n", err)
-		return nil, fmt.Errorf("failed to parse bank data: %w", err)
+	if err := json.Unmarshal(rawData, &sbd); err != nil {
+		slog.Error("ServerBankData unmarshal failed", "endpoint", endpoint, "err", err)
+		return nil, newParseError(endpoint, err)
 	}
 
-	fmt.Printf("[API_DOWNLOAD_SERVER_BANK] BankID=%d, DisplayName=%q, len(Questions)=%d\n", sbd.BankID, sbd.DisplayName, len(sbd.Questions))
-
+	slog.Info("server bank downloaded", "bankID", sbd.BankID, "displayName", sbd.DisplayName, "questions", len(sbd.Questions))
 	return &sbd, nil
 }
 
@@ -288,7 +473,7 @@ func (c *APIClient) CreateExamSession(examTemplateID int) (*ExamSessionData, err
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("create exam failed: %s", resp.Msg)
+		return nil, newServerCodeError("/templates", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -307,7 +492,7 @@ func (c *APIClient) SubmitExam(examSessionID string, answers map[string]string) 
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("submit exam failed: %s", resp.Msg)
+		return nil, newServerCodeError("/my-exams/submit", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -325,7 +510,7 @@ func (c *APIClient) UploadWrongSet(wrongQuestions []WrongQuestionItem) error {
 	}
 
 	if resp.Code != 0 {
-		return fmt.Errorf("upload wrong-set failed: %s", resp.Msg)
+		return newServerCodeError("/wrongset/upload", resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -342,7 +527,7 @@ func (c *APIClient) FetchUserList() ([]UserItem, error) {
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("fetch user list failed: %s", resp.Msg)
+		return nil, newServerCodeError("/users", resp.Code, resp.Msg)
 	}
 
 	return resp.Data, nil
@@ -359,7 +544,7 @@ func (c *APIClient) CreateExamTemplate(req CreateExamTemplateReq) (*ExamTemplate
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("create exam template failed: %s", resp.Msg)
+		return nil, newServerCodeError("/templates", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -389,7 +574,7 @@ func (c *APIClient) CreateAndPushExam(req CreateAndPushReq) (*CreateAndPushData,
 	fmt.Printf("[API_CREATE_AND_PUSH_EXAM] ========== 创建并推送考试结束 ==========\n")
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("create and push exam failed: %s", resp.Msg)
+		return nil, newServerCodeError("/templates/create-and-push", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -424,7 +609,7 @@ func (c *APIClient) PushExam(templateID int, targetUserIDs []int) error {
 	fmt.Printf("[API_PUSH_EXAM] ========== 推送考试结束 ==========\n")
 
 	if resp.Code != 0 {
-		return fmt.Errorf("push exam failed: %s", resp.Msg)
+		return newServerCodeError("/templates/push", resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -456,7 +641,7 @@ func (c *APIClient) GetMyExams() ([]MyExamItem, error) {
 	fmt.Printf("[API_GET_MY_EXAMS] ========== 获取我的考试列表结束 ==========\n")
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("fetch my exams failed: %s", resp.Msg)
+		return nil, newServerCodeError("/my-exams", resp.Code, resp.Msg)
 	}
 
 	return resp.Data, nil
@@ -489,7 +674,7 @@ func (c *APIClient) StartMyExam(examID int) (*ExamSessionData, error) {
 	fmt.Printf("[API_START_MY_EXAM] ========== 开始考试结束 ==========\n")
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("start exam failed: %s", resp.Msg)
+		return nil, newServerCodeError("/my-exams/start", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -527,7 +712,7 @@ func (c *APIClient) SubmitMyExam(examSessionID string, answers map[string]string
 	fmt.Printf("[API_SUBMIT_MY_EXAM] ========== 提交我的考试结束 ==========\n")
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("submit exam failed: %s", resp.Msg)
+		return nil, newServerCodeError("/my-exams/submit", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -547,7 +732,7 @@ func (c *APIClient) RefreshToken(refreshToken string) (*RefreshData, error) {
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("refresh token failed: %s", resp.Msg)
+		return nil, newServerCodeError("/auth/refresh", resp.Code, resp.Msg)
 	}
 
 	c.token = resp.Data.Token
@@ -573,7 +758,7 @@ func (c *APIClient) FetchUsers(limit, offset int) ([]UserItem, int, error) {
 	}
 	fmt.Printf("[API_USERS] RESPONSE: Code=%d, Msg=%q, Total=%d, Data=%+v\n", resp.Code, resp.Msg, resp.Total, resp.Data)
 	if resp.Code != 0 {
-		return nil, 0, fmt.Errorf("fetch users failed: %s", resp.Msg)
+		return nil, 0, newServerCodeError("/users", resp.Code, resp.Msg)
 	}
 
 	// Parse the data as []UserItem
@@ -606,7 +791,7 @@ func (c *APIClient) FetchAdmins(limit, offset int) ([]UserItem, int, error) {
 	}
 	fmt.Printf("[API_ADMINS] RESPONSE: Code=%d, Msg=%q, Total=%d, Data=%+v\n", resp.Code, resp.Msg, resp.Total, resp.Data)
 	if resp.Code != 0 {
-		return nil, 0, fmt.Errorf("fetch admins failed: %s", resp.Msg)
+		return nil, 0, newServerCodeError("/admins", resp.Code, resp.Msg)
 	}
 
 	dataBytes, _ := json.Marshal(resp.Data)
@@ -627,7 +812,7 @@ func (c *APIClient) CreateUser(req CreateUserReq) (*UserItem, error) {
 	fmt.Printf("[API_USERS] RESPONSE: Code=%d, Msg=%q, Data={UserID:%d, Username:%q, Role:%q}\n", resp.Code, resp.Msg, resp.Data.UserID, resp.Data.Username, resp.Data.Role)
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("create user failed: %s", resp.Msg)
+		return nil, newServerCodeError("/users", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -645,7 +830,7 @@ func (c *APIClient) UpdateUser(userID int, req UpdateUserReq) error {
 	fmt.Printf("[API_USERS] RESPONSE: Code=%d, Msg=%q\n", resp.Code, resp.Msg)
 
 	if resp.Code != 0 {
-		return fmt.Errorf("update user failed: %s", resp.Msg)
+		return newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -663,7 +848,7 @@ func (c *APIClient) DeleteUser(userID int) error {
 	fmt.Printf("[API_USERS] RESPONSE: Code=%d, Msg=%q\n", resp.Code, resp.Msg)
 
 	if resp.Code != 0 {
-		return fmt.Errorf("delete user failed: %s", resp.Msg)
+		return newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -694,7 +879,7 @@ func (c *APIClient) FetchBanksList(bankName, category string, limit, offset int)
 	}
 
 	if resp.Code != 0 {
-		return nil, 0, fmt.Errorf("fetch banks list failed: %s", resp.Msg)
+		return nil, 0, newServerCodeError("/banks", resp.Code, resp.Msg)
 	}
 
 	dataBytes, _ := json.Marshal(resp.Data)
@@ -713,7 +898,7 @@ func (c *APIClient) CreateBank(req CreateBankReq) (int, error) {
 	}
 
 	if resp.Code != 0 {
-		return 0, fmt.Errorf("create bank failed: %s", resp.Msg)
+		return 0, newServerCodeError("/banks", resp.Code, resp.Msg)
 	}
 
 	return resp.Data.BankID, nil
@@ -729,7 +914,7 @@ func (c *APIClient) UpdateBank(bankID int, req CreateBankReq) error {
 	}
 
 	if resp.Code != 0 {
-		return fmt.Errorf("update bank failed: %s", resp.Msg)
+		return newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -752,7 +937,7 @@ func (c *APIClient) DeleteBank(displayName, ownerUsername string) error {
 	fmt.Printf("[API_DELETE_BANK] RESPONSE: Code=%d, Msg=%q\n", resp.Code, resp.Msg)
 
 	if resp.Code != 0 {
-		return fmt.Errorf("delete bank failed: %s", resp.Msg)
+		return newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -788,7 +973,7 @@ func (c *APIClient) FetchQuestions(bankID int, content, questionType, difficulty
 	}
 
 	if resp.Code != 0 {
-		return nil, 0, fmt.Errorf("fetch questions failed: %s", resp.Msg)
+		return nil, 0, newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	dataBytes, _ := json.Marshal(resp.Data)
@@ -808,7 +993,7 @@ func (c *APIClient) CreateQuestion(bankID int, req CreateQuestionReq) (int, erro
 	}
 
 	if resp.Code != 0 {
-		return 0, fmt.Errorf("create question failed: %s", resp.Msg)
+		return 0, newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return resp.Data.QuestionID, nil
@@ -824,7 +1009,7 @@ func (c *APIClient) UpdateQuestion(bankID, questionID int, req CreateQuestionReq
 	}
 
 	if resp.Code != 0 {
-		return fmt.Errorf("update question failed: %s", resp.Msg)
+		return newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -840,7 +1025,7 @@ func (c *APIClient) DeleteQuestion(bankID, questionID int) error {
 	}
 
 	if resp.Code != 0 {
-		return fmt.Errorf("delete question failed: %s", resp.Msg)
+		return newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -855,7 +1040,7 @@ func (c *APIClient) BatchImportQuestions(req BatchImportQuestionsReq) (*ImportRe
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("batch import questions failed: %s", resp.Msg)
+		return nil, newServerCodeError("/banks/import", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -891,7 +1076,7 @@ func (c *APIClient) FetchTemplates(limit, offset int) ([]TemplateItem, int, erro
 
 	if resp.Code != 0 {
 		fmt.Printf("[API_FETCH_TEMPLATES] ========== 获取考试模板列表失败 ==========\n")
-		return nil, 0, fmt.Errorf("fetch templates failed: %s", resp.Msg)
+		return nil, 0, newServerCodeError("/templates", resp.Code, resp.Msg)
 	}
 
 	dataBytes, _ := json.Marshal(resp.Data)
@@ -925,7 +1110,7 @@ func (c *APIClient) UpdateTemplate(templateID int, req TemplateUpdateReq) error 
 	}
 
 	if resp.Code != 0 {
-		return fmt.Errorf("update template failed: %s", resp.Msg)
+		return newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -949,7 +1134,7 @@ func (c *APIClient) GetTemplateDetail(templateID int) (*TemplateDetailItem, erro
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("get template detail failed: %s", resp.Msg)
+		return nil, newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -965,7 +1150,7 @@ func (c *APIClient) DeleteTemplate(templateID int) error {
 	}
 
 	if resp.Code != 0 {
-		return fmt.Errorf("delete template failed: %s", resp.Msg)
+		return newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return nil
@@ -980,7 +1165,7 @@ func (c *APIClient) CancelExam(req CancelExamReq) (*CancelData, error) {
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("cancel exam failed: %s", resp.Msg)
+		return nil, newServerCodeError("/templates/cancel", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -1003,7 +1188,7 @@ func (c *APIClient) ExportResults(templateID, examID int, format string) ([]Expo
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("export results failed: %s", resp.Msg)
+		return nil, newServerCodeError("/templates/export", resp.Code, resp.Msg)
 	}
 
 	return resp.Data, nil
@@ -1024,7 +1209,7 @@ func (c *APIClient) ImportBanks(req BankImportReq) (*ImportBankData, string, err
 	fmt.Printf("[API_IMPORT] resp.Code=%d, resp.Msg=%q, resp.Data.Imported=%d, resp.Data.Failed=%d, resp.Data.Errors=%v, resp.Data.Duplicates=%v\n", resp.Code, resp.Msg, resp.Data.Imported, resp.Data.Failed, resp.Data.Errors, resp.Data.Duplicates)
 
 	if resp.Code != 0 {
-		err := fmt.Errorf("import banks failed: %s", resp.Msg)
+		err := newServerCodeError("/banks/import", resp.Code, resp.Msg)
 		fmt.Printf("[API_IMPORT] code != 0, returning error: %v\n", err)
 		// Still return resp.Data so caller can access Duplicates
 		return &resp.Data, resp.Msg, err
@@ -1061,7 +1246,7 @@ func (c *APIClient) FetchBanksByOwner(owner, bankName string, limit, offset int)
 	fmt.Printf("[API_FETCH_BANKS] resp.Code=%d, resp.Msg=%q, resp.Total=%d, resp.Data=%v\n", resp.Code, resp.Msg, resp.Total, resp.Data)
 
 	if resp.Code != 0 {
-		return nil, 0, fmt.Errorf("fetch banks by owner failed: %s", resp.Msg)
+		return nil, 0, newServerCodeError("/banks/owner", resp.Code, resp.Msg)
 	}
 
 	dataBytes, _ := json.Marshal(resp.Data)
@@ -1086,7 +1271,7 @@ func (c *APIClient) FetchMyBanks() ([]MyBankItem, error) {
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("fetch my banks failed: %s", resp.Msg)
+		return nil, newServerCodeError("/my-banks", resp.Code, resp.Msg)
 	}
 
 	return resp.Data, nil
@@ -1098,58 +1283,21 @@ func (c *APIClient) FetchMyBanks() ([]MyBankItem, error) {
 // The /export endpoint returns a data field that is structurally identical to parser.BankData
 // (displayName/storageKey/questions), so we parse it directly as *parser.BankData.
 func (c *APIClient) DownloadBankDetail(bankID int) (*parser.BankData, error) {
-	fmt.Printf("[API_DOWNLOAD_DETAIL] REQUEST: GET /banks/%d/export\n", bankID)
-
-	type RawResp struct {
-		Code int             `json:"code"`
-		Msg  string          `json:"msg"`
-		Data json.RawMessage `json:"data"`
-	}
-	var raw RawResp
-
 	endpoint := fmt.Sprintf("/banks/%d/export", bankID)
-	req, _ := http.NewRequest("GET", BaseURL+endpoint, nil)
-	req.Header.Set("Authorization", "Bearer "+c.token)
 
-	resp, err := c.client.Do(req)
+	rawData, err := c.fetchBankExportRaw(bankID)
 	if err != nil {
-		fmt.Printf("[API_DOWNLOAD_DETAIL] HTTP request error: %v\n", err)
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	fmt.Printf("[API_DOWNLOAD_DETAIL] HTTP status=%d, body=%s\n", resp.StatusCode, string(bodyBytes))
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var apiErr struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		}
-		json.Unmarshal(bodyBytes, &apiErr)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiErr.Msg)
-	}
-
-	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
-		fmt.Printf("[API_DOWNLOAD_DETAIL] JSON unmarshal error: %v\n", err)
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if raw.Code != 0 {
-		return nil, fmt.Errorf("download bank detail failed: %s", raw.Msg)
-	}
-
-	fmt.Printf("[API_DOWNLOAD_DETAIL] raw.Data = %s\n", string(raw.Data))
 
 	// The /export endpoint returns data that is directly a parser.BankData (displayName/storageKey/questions).
 	var bd parser.BankData
-	if err := json.Unmarshal(raw.Data, &bd); err != nil {
-		fmt.Printf("[API_DOWNLOAD_DETAIL] BankData unmarshal error: %v\n", err)
-		return nil, fmt.Errorf("failed to parse bank data: %w", err)
+	if err := json.Unmarshal(rawData, &bd); err != nil {
+		slog.Error("parser.BankData unmarshal failed", "endpoint", endpoint, "err", err)
+		return nil, newParseError(endpoint, err)
 	}
 
-	fmt.Printf("[API_DOWNLOAD_DETAIL] DisplayName=%q, StorageKey=%q, len(Questions)=%d\n", bd.DisplayName, bd.StorageKey, len(bd.Questions))
-
+	slog.Info("bank detail downloaded", "endpoint", endpoint, "displayName", bd.DisplayName, "storageKey", bd.StorageKey, "questions", len(bd.Questions))
 	return &bd, nil
 }
 
@@ -1171,7 +1319,7 @@ func (c *APIClient) LoadLoginLogs(limit, offset int) ([]LoginLogItem, int, error
 	}
 
 	if resp.Code != 0 {
-		return nil, 0, fmt.Errorf("load login logs failed: %s", resp.Msg)
+		return nil, 0, newServerCodeError("/login-logs", resp.Code, resp.Msg)
 	}
 
 	dataBytes, _ := json.Marshal(resp.Data)
@@ -1192,7 +1340,7 @@ func (c *APIClient) PauseExam(req PauseExamReq) (*PauseResumeData, error) {
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("pause exam failed: %s", resp.Msg)
+		return nil, newServerCodeError("/my-exams/pause", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -1207,7 +1355,7 @@ func (c *APIClient) ResumeExam(req PauseExamReq) (*PauseResumeData, error) {
 	}
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("resume exam failed: %s", resp.Msg)
+		return nil, newServerCodeError("/my-exams/resume", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -1241,7 +1389,7 @@ func (c *APIClient) GetExamResult(sessionID string) (*ExamDetailResult, error) {
 	fmt.Printf("[API_GET_EXAM_RESULT] ========== 获取考试详情结束 ==========\n")
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("get exam result failed: %s", resp.Msg)
+		return nil, newServerCodeError(endpoint, resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil
@@ -1274,7 +1422,7 @@ func (c *APIClient) PushBank(req PushBankReq) (*PushBankData, error) {
 	fmt.Printf("[API_PUSH_BANK] ========== 推送题库结束 ==========\n")
 
 	if resp.Code != 0 {
-		return nil, fmt.Errorf("push bank failed: %s", resp.Msg)
+		return nil, newServerCodeError("/banks/push-by-names", resp.Code, resp.Msg)
 	}
 
 	return &resp.Data, nil

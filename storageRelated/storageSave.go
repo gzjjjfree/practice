@@ -2,7 +2,7 @@ package storageRelated
 
 import (
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +15,7 @@ type PracticeStorageData struct {
 	Records map[string]map[string]string `json:"records"`
 	Indices map[string]int               `json:"indices"`
 }
+
 func SaveWrongSetToLocal(state *core.AppState) {
 	saveSetNoLock(state, "错题集", state.WrongSet)
 }
@@ -48,11 +49,11 @@ func saveSetNoLock(state *core.AppState, suffix string, currentSet map[string]bo
 
 	jsonData, err := json.Marshal(idList)
 	if err != nil {
-		fmt.Printf("[WARN] marshal %s failed: %v\n", fileName, err)
+		slog.Warn("marshal failed", "file", fileName, "err", err)
 		return
 	}
 	if err := os.WriteFile(absolutePath, jsonData, 0644); err != nil {
-		fmt.Printf("[WARN] write %s failed: %v\n", fileName, err)
+		slog.Warn("write file failed", "file", fileName, "err", err)
 	}
 }
 
@@ -128,11 +129,11 @@ func savePracticeRecordsNoLock(state *core.AppState, modeRecordsCopy map[string]
 
 	bytesData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		fmt.Printf("[WARN] marshal records %s failed: %v\n", fileName, err)
+		slog.Warn("marshal records failed", "file", fileName, "err", err)
 		return
 	}
 	if err := os.WriteFile(absolutePath, bytesData, 0644); err != nil {
-		fmt.Printf("[WARN] write records %s failed: %v\n", fileName, err)
+		slog.Warn("write records failed", "file", fileName, "err", err)
 	}
 }
 

@@ -9,6 +9,13 @@ import "fyne.io/fyne/v2"
 
 ---
 
+## 📚 核心文档索引
+
+- **[系统架构设计文档 (ARCHITECTURE.md)](ARCHITECTURE.md)**：详细阐述项目分层结构、模块划分及并发安全设计。
+- **[RESTful API 文档 (API.md)](API.md)**：详细记录与后端服务交互的所有 API 接口、请求/响应结构及鉴权规范。
+
+---
+
 ## 🌟 核心特性
 
 - **📱 跨平台智能滑动翻页**：自研 `TouchInterceptor` 探测器，完美解决手机端（Android/iOS）与桌面端（WSL/Windows）的滚动冲突。

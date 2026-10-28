@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"runtime"
 	"strings"
@@ -137,6 +138,48 @@ func batchStripLeadingNumbers(questions []QuestionItem, threshold int) {
 	}
 }
 
+// SanitizeXSS filters out potential XSS attack vectors from input strings.
+func SanitizeXSS(input string) string {
+	if input == "" {
+		return ""
+	}
+	// 1. Remove <script>...</script> tags (case-insensitive)
+	scriptReg := regexp.MustCompile(`(?i)<script\b[^>]*>[\s\S]*?<\/script>`)
+	cleaned := scriptReg.ReplaceAllString(input, "")
+
+	// 2. Remove javascript: pseudo-protocol
+	jsProtocolReg := regexp.MustCompile(`(?i)javascript\s*:`)
+	cleaned = jsProtocolReg.ReplaceAllString(cleaned, "")
+
+	// 3. Remove dangerous HTML event handlers (onload, onerror, onclick, onmouseover, etc.)
+	eventHandlerReg := regexp.MustCompile(`(?i)\s+on[a-z]+\s*=\s*(?:["\'][^"\']*["\']|[^\s>]+)`)
+	cleaned = eventHandlerReg.ReplaceAllString(cleaned, "")
+
+	// 4. Remove dangerous tags (iframe, object, embed, applet, meta, link, style, form, etc.)
+	dangerTagReg := regexp.MustCompile(`(?i)<\/?(iframe|object|embed|applet|meta|link|style|form|input|button)\b[^>]*>`)
+	cleaned = dangerTagReg.ReplaceAllString(cleaned, "")
+
+	return cleaned
+}
+
+// SanitizeBankData applies XSS sanitization to all fields in BankData.
+func SanitizeBankData(bank *BankData) {
+	if bank == nil {
+		return
+	}
+	bank.DisplayName = SanitizeXSS(bank.DisplayName)
+	bank.StorageKey = SanitizeXSS(bank.StorageKey)
+	for i := range bank.Questions {
+		bank.Questions[i].Content = SanitizeXSS(bank.Questions[i].Content)
+		bank.Questions[i].Answer = SanitizeXSS(bank.Questions[i].Answer)
+		bank.Questions[i].Difficulty = SanitizeXSS(bank.Questions[i].Difficulty)
+		bank.Questions[i].SheetName = SanitizeXSS(bank.Questions[i].SheetName)
+		for k, v := range bank.Questions[i].Options {
+			bank.Questions[i].Options[k] = SanitizeXSS(v)
+		}
+	}
+}
+
 // ==================== Core Parsing Engine ====================
 
 // ParseBytesToBank detects file format via magic bytes and dispatches to the appropriate parser.
@@ -146,7 +189,7 @@ func ParseBytesToBank(fileBytes []byte, fileName string, storageKey string) (ban
 			stackBuf := make([]byte, 4096)
 			n := runtime.Stack(stackBuf, false)
 			stackTrace := string(stackBuf[:n])
-			fmt.Printf("[PANIC] parse error (caught): %v\n%s\n", r, stackTrace)
+			slog.Error("parse error (caught panic)", "err", r, "stack", stackTrace)
 			err = fmt.Errorf("parse error (caught): %v\nstack: %s", r, stackTrace)
 		}
 	}()
@@ -157,26 +200,25 @@ func ParseBytesToBank(fileBytes []byte, fileName string, storageKey string) (ban
 
 	// XLSX parsing
 	if isXLSX {
-		fmt.Println("in isXLSX")
 		f, err := excelize.OpenReader(bytes.NewReader(fileBytes))
 		if err != nil {
 			return nil, fmt.Errorf("XLSX decode error: %w", err)
 		}
 		defer f.Close()
-		return parseExcelFromOpenedFile(f, storageKey)
-	}
-
-	// TXT parsing
-	if isTXT {
-		fmt.Println("in isTXT")
+		bank, err = parseExcelFromOpenedFile(f, storageKey)
+		if err != nil {
+			return nil, err
+		}
+	} else if isTXT {
 		rawData, err := readTxtFileWithEncodingFix(fileBytes)
 		if err != nil {
 			return nil, fmt.Errorf("TXT file read failed")
 		}
-		return parseTxtContentDirect(rawData, storageKey)
-	}
-
-	if isJSON {
+		bank, err = parseTxtContentDirect(rawData, storageKey)
+		if err != nil {
+			return nil, err
+		}
+	} else if isJSON {
 		var parsedBank *BankData
 		err := json.Unmarshal(fileBytes, &parsedBank)
 		if err != nil {
@@ -189,10 +231,14 @@ func ParseBytesToBank(fileBytes []byte, fileName string, storageKey string) (ban
 
 		parsedBank.DisplayName = ExtractFileName(storageKey)
 		parsedBank.StorageKey = storageKey
-		return parsedBank, nil
+		bank = parsedBank
+	} else {
+		return nil, fmt.Errorf("unsupported file format (could not recognize xls/xlsx magic bytes)")
 	}
 
-	return nil, fmt.Errorf("unsupported file format (could not recognize xls/xlsx magic bytes)")
+	// XSS 过滤处理
+	SanitizeBankData(bank)
+	return bank, nil
 }
 
 // ==================== Smart Header Search ====================
