@@ -41,3 +41,15 @@ func TestLRUCache(t *testing.T) {
 		t.Errorf("expected cache to be cleared")
 	}
 }
+
+func TestNewAPIClientAndToken(t *testing.T) {
+	client := NewAPIClient()
+	if client == nil {
+		t.Fatal("NewAPIClient returned nil")
+	}
+
+	client.SetToken("test_token_123")
+	if client.GetToken() != "test_token_123" {
+		t.Errorf("expected token 'test_token_123', got %q", client.GetToken())
+	}
+}

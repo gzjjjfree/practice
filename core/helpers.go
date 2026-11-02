@@ -18,7 +18,7 @@ import (
 	"github.com/gzjjjfree/practice/parser"
 )
 
-// Question 表示一道题目，包含题干、选项、答案和难度信息。
+// Question 表示一道题目，包含题干、选项、答案、难度信息及所属题库名称。
 type Question struct {
 	ID         string
 	Type       string // "单选题", "多选题", "判断题", "填空题", "问答题"
@@ -27,6 +27,7 @@ type Question struct {
 	Answers    []string // 正确答案的 Label，例如 ["A", "C"]
 	Difficulty string
 	Score      float64
+	BankName   string // 所属题库名称
 }
 
 // Option 表示题目的一个选项，包含字母标签和文本内容。
@@ -383,7 +384,7 @@ func (state *AppState) Login(username, password string, callback func(success bo
 
 // Logout performs user logout.
 func (state *AppState) Logout(callback func(success bool, msg string)) {
-	// Clear local state
+	// Clear local state and release references
 	state.Token = ""
 	state.Username = ""
 	state.Role = ""
@@ -392,6 +393,19 @@ func (state *AppState) Logout(callback func(success bool, msg string)) {
 	state.ExamAnswers = make(map[string]string)
 	state.CurrentServerBank = nil
 	state.ServerBanks = nil
+	state.Questions = nil
+	state.CurrentList = nil
+	state.LocalQuestionPool = nil
+	state.ServerQuestionPool = nil
+	state.AvailableUsers = nil
+	state.MyExams = nil
+	state.UserAnswers = make(map[string][]string)
+	state.Submitted = make(map[string]bool)
+	state.ModeRecords = make(map[string]map[string]string)
+	state.PracticeRecords = make(map[string]string)
+	state.WrongSet = make(map[string]bool)
+	state.FavSet = make(map[string]bool)
+	state.ModeIndices = make(map[string]int)
 
 	// Clear saved token and refresh token
 	if err := state.TokenStorage.ClearToken(); err != nil {
@@ -983,6 +997,7 @@ func SyncQuestionsToState(state *AppState, bankData *parser.BankData) {
 			Options:    convertedOpts,
 			Answers:    answers,
 			Difficulty: srcQ.Difficulty,
+			BankName:   bankData.DisplayName,
 		}
 	}
 
@@ -1021,7 +1036,7 @@ func TruncateUsername(username string) string {
 
 // ==================== 12. 响应式布局与屏幕尺寸检测 ====================
 
-// GetCanvasSize 获取窗口的当前画布尺寸，如果窗口为空或画布为空则返回默认尺寸 (400, 750)。
+// GetCanvasSize 获取窗口的当前画布尺寸，如果窗口为空或画布为空则返回默认尺寸 (DefaultCanvasWidth, DefaultCanvasHeight)。
 func GetCanvasSize(w fyne.Window) fyne.Size {
 	if w != nil && w.Canvas() != nil {
 		size := w.Canvas().Size()
@@ -1029,13 +1044,41 @@ func GetCanvasSize(w fyne.Window) fyne.Size {
 			return size
 		}
 	}
-	return fyne.NewSize(400, 750)
+	return fyne.NewSize(DefaultCanvasWidth, DefaultCanvasHeight)
 }
 
-// IsSmallScreen 检测当前窗口/屏幕是否为小屏幕（例如手机端或小分辨率窗口宽度 < 550 或高度 < 700）。
+// IsSmallScreen 检测当前窗口/屏幕是否为小屏幕（例如手机端或小分辨率窗口宽度 < SmallScreenWidth 或高度 < SmallScreenHeight）。
 func IsSmallScreen(w fyne.Window) bool {
 	size := GetCanvasSize(w)
-	return size.Width < 550 || size.Height < 700
+	return size.Width < SmallScreenWidth || size.Height < SmallScreenHeight
+}
+
+// IsTabletOrDesktop 检测当前窗口/屏幕是否为平板或大屏桌面端（宽度 >= TabletWidth）。
+func IsTabletOrDesktop(w fyne.Window) bool {
+	size := GetCanvasSize(w)
+	return size.Width >= TabletWidth
+}
+
+// IsLandscape 检测当前窗口是否处于横屏状态（宽度 > 高度）。
+func IsLandscape(w fyne.Window) bool {
+	size := GetCanvasSize(w)
+	return size.Width > size.Height
+}
+
+// GetResponsiveColumns 根据当前窗口宽度及网格项最小宽度计算响应式列数（适用于平板/大屏多列展示）。
+func GetResponsiveColumns(w fyne.Window, minColWidth float32) int {
+	size := GetCanvasSize(w)
+	if minColWidth <= 0 {
+		minColWidth = 300
+	}
+	cols := int(size.Width / minColWidth)
+	if cols < 1 {
+		cols = 1
+	}
+	if cols > 4 {
+		cols = 4
+	}
+	return cols
 }
 
 // GetResponsiveWidth 根据窗口宽度计算响应式内容宽度（例如最大限制或边距适配）。
@@ -1045,8 +1088,8 @@ func GetResponsiveWidth(w fyne.Window, maxAllowedWidth float32, margin float32) 
 	if width > maxAllowedWidth {
 		width = maxAllowedWidth
 	}
-	if width < 100 {
-		width = 100
+	if width < MinResponsiveWidth {
+		width = MinResponsiveWidth
 	}
 	return width
 }

@@ -26,6 +26,10 @@ import (
 
 // RefreshLocalFilesList 扫描本地沙盒目录中的 .json 题库文件，更新已存储文件列表。
 func RefreshLocalFilesList(state *core.AppState) {
+	// 7.3.1 清理过期临时文件与 7.3.2 存储空间监控
+	CleanupExpiredStorageFiles()
+	CheckStorageSpace()
+
 	storageDir := GetStorageDir()
 	files, err := os.ReadDir(storageDir)
 	if err != nil {
@@ -62,8 +66,6 @@ func RefreshLocalFilesList(state *core.AppState) {
 				ts, _ := strconv.ParseInt(tsStr, 10, 64)
 				fileList = append(fileList, FileInfo{Key: name, Timestamp: ts})
 			} else {
-				// No timestamp in filename (e.g., overwritten file like xlsxData_xxx.json)
-				// Use current time so it sorts correctly (treated as newest)
 				fileList = append(fileList, FileInfo{Key: name, Timestamp: time.Now().UnixNano() / int64(time.Millisecond)})
 			}
 		}
@@ -89,7 +91,7 @@ func LoadAndRenderBank(w fyne.Window, state *core.AppState, targetKey string) {
 	storageDir := GetStorageDir()
 	absoluteReadPath := filepath.Join(storageDir, targetKey+".json")
 
-	bytesData, err := os.ReadFile(absoluteReadPath)
+	bytesData, err := ReadFileWithChecksum(absoluteReadPath)
 	if err == nil {
 		var bankData parser.BankData
 		if err := json.Unmarshal(bytesData, &bankData); err == nil {
@@ -98,11 +100,9 @@ func LoadAndRenderBank(w fyne.Window, state *core.AppState, targetKey string) {
 			LoadPracticeRecordsFromLocal(state)
 			fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", state.CurrentStorageKey)
 		} else {
-			// 静默忽略JSON反序列化失败，不弹窗提示用户
 			fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", "")
 		}
 	} else {
-		// 静默忽略读取沙盒文件失败，不弹窗提示用户
 		fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", "")
 	}
 }
@@ -177,21 +177,18 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 		processAndSave := func(isNewAlias bool) {
 			fileName := originalFileName
 
-			// 如果是作为副本新增，生成唯一文件名
 			if isNewAlias {
 				fileName = GenerateUniqueBankFileName(storageDir, originalFileName)
-			} else { // 覆盖原有旧文件
+			} else {
 				for _, oldName := range oldFileNames {
 					_ = os.Remove(filepath.Join(storageDir, oldName))
 				}
 			}
 
-			// 显示加载进度框
 			progDialog := dialog.NewCustomWithoutButtons("读取中", widget.NewProgressBarInfinite(), w)
 			progDialog.Show()
 			defer progDialog.Hide()
 
-			// 旧版 XLS 升级处理
 			if strings.ToLower(filepath.Ext(fileName)) == ".xls" {
 				if newBytes, convErr := parser.ConvertXlsToXlsxBytes(fileBytes); convErr == nil {
 					fileBytes = newBytes
@@ -203,7 +200,6 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 			fileExt := strings.ToLower(parser.GetFileExtension(fileName))
 			storageKey := fmt.Sprintf("%sData_%s_%d", fileExt, fileName, timestamp)
 
-			// 解析并保存
 			bankData, parseErr := parser.ParseBytesToBank(fileBytes, fileName, storageKey)
 			if parseErr != nil {
 				customElements.ShowCustomInformation("解析失败", fmt.Sprintf("无法解析文件 %s: %v", fileName, parseErr), w)
@@ -211,12 +207,11 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 			}
 
 			jsonData, _ := json.Marshal(bankData)
-			if err := os.WriteFile(filepath.Join(storageDir, storageKey+".json"), jsonData, 0644); err != nil {
+			if err := AtomicWriteFileWithChecksum(filepath.Join(storageDir, storageKey+".json"), jsonData); err != nil {
 				customElements.ShowCustomInformation("存储失败", fmt.Sprintf("无法存储文件 %s: %v", fileName, err), w)
 				return
 			}
 
-			// 更新全局状态与UI
 			fyne.CurrentApp().Preferences().SetString("LastOpenedBankKey", storageKey)
 			state.CurrentStorageKey = bankData.StorageKey
 			state.CurrentFileName = bankData.DisplayName
@@ -226,7 +221,6 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 			refreshHomeUI()
 		}
 
-		// 文件重复弹窗确认
 		if len(oldFileNames) > 0 {
 			showConflictDialog(w, originalFileName, processAndSave)
 		} else {
@@ -242,8 +236,8 @@ func ShowBankFileOpenDialog(w fyne.Window, state *core.AppState, refreshHomeUI f
 type ConflictResolutionChoice int
 
 const (
-	ResolveOverwrite ConflictResolutionChoice = iota // 覆盖原有文件
-	ResolveNewAlias                                  // 作为新文件保存
+	ResolveOverwrite ConflictResolutionChoice = iota
+	ResolveNewAlias
 )
 
 // FindExistingBankFiles 查找本地存储中与指定文件名冲突的题库文件
@@ -257,14 +251,12 @@ func FindExistingBankFiles(storageDir string, humanName string) []string {
 	var oldFileNames []string
 	for _, f := range files {
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
-			// 排除错题集、收藏集、答题记录等文件
 			if strings.Contains(f.Name(), "错题") || strings.Contains(f.Name(), "收藏") || strings.Contains(f.Name(), "答题记录") {
 				continue
 			}
 
 			for _, p := range searchPatterns {
 				if strings.Contains(f.Name(), p) {
-					// 排除带(n)后缀的文件如：测试题库.xlsx(1)_timestamp.json
 					if !strings.Contains(f.Name(), "_"+baseName+"(") && !strings.Contains(f.Name(), humanName+"(") {
 						oldFileNames = append(oldFileNames, f.Name())
 					}
@@ -315,7 +307,7 @@ func ShowFileConflictDialog(w fyne.Window, fileName string, onChoice func(choice
 	confirmDialog.Show()
 }
 
-// GenerateUniqueBankFileName 根据原有文件名和存储目录，生成不重复的唯一副本文件名（如：测试(1).xlsx）
+// GenerateUniqueBankFileName 根据原有文件名和存储目录，生成不重复的唯一副本文件名
 func GenerateUniqueBankFileName(storageDir string, originalFileName string) string {
 	files, _ := os.ReadDir(storageDir)
 	ext := filepath.Ext(originalFileName)
@@ -340,7 +332,7 @@ func GenerateUniqueBankFileName(storageDir string, originalFileName string) stri
 	return fileName
 }
 
-// GenerateNewStorageKey 生成新的存储键（处理新增副本的情况）
+// GenerateNewStorageKey 生成新的存储键
 func GenerateNewStorageKey(storageDir string, humanName string, fileExtPrefix string) string {
 	ext := filepath.Ext(humanName)
 	baseName := strings.TrimSuffix(humanName, ext)
@@ -349,7 +341,6 @@ func GenerateNewStorageKey(storageDir string, humanName string, fileExtPrefix st
 		testFileName := fmt.Sprintf("%s(%d)%s", baseName, counter, ext)
 		testKey := fmt.Sprintf("%sData_%s_%d", fileExtPrefix, testFileName, time.Now().UnixMilli())
 
-		// 检查该存储键是否已存在
 		exists := false
 		files, _ := os.ReadDir(storageDir)
 		for _, f := range files {
@@ -376,7 +367,6 @@ func OverwriteExistingBankFiles(storageDir string, oldFileNames []string) error 
 	return nil
 }
 
-// 辅助函数：显示同名覆盖/新增冲突弹窗（保留向后兼容）
 func showConflictDialog(w fyne.Window, fileName string, onChoice func(isNewAlias bool)) {
 	ShowFileConflictDialog(w, fileName, func(choice ConflictResolutionChoice) {
 		onChoice(choice == ResolveNewAlias)
@@ -400,7 +390,7 @@ func LoadSetFromLocal(state *core.AppState, suffix string) map[string]bool {
 	storageDir := GetStorageDir()
 	absolutePath := filepath.Join(storageDir, fileName)
 
-	bytesData, err := os.ReadFile(absolutePath)
+	bytesData, err := ReadFileWithChecksum(absolutePath)
 	if err != nil {
 		return resultSet
 	}
@@ -428,7 +418,7 @@ func LoadPracticeRecordsFromLocal(state *core.AppState) {
 	storageDir := GetStorageDir()
 	absolutePath := filepath.Join(storageDir, fileName)
 
-	bytesData, err := os.ReadFile(absolutePath)
+	bytesData, err := ReadFileWithChecksum(absolutePath)
 	if err != nil {
 		state.ModeRecords = make(map[string]map[string]string)
 		state.ModeIndices = make(map[string]int)
@@ -445,7 +435,6 @@ func LoadPracticeRecordsFromLocal(state *core.AppState) {
 			state.ModeIndices = make(map[string]int)
 		}
 	} else {
-		// Fallback for old format (map[string]map[string]string)
 		var oldRecords map[string]map[string]string
 		err = json.Unmarshal(bytesData, &oldRecords)
 		if err != nil {

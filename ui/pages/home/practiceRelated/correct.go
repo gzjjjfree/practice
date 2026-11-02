@@ -520,6 +520,13 @@ func RenderCorrectionCard(w fyne.Window, state *core.AppState, q core.Question, 
 //  4. 如果发生错误，则通过 dialog.ShowError 显示保存失败的错误信息并返回。
 //  5. 如果成功，则通过 customElements.ShowCustomInformation 显示成功提示，并调用 onRefresh() 刷新 UI。
 func ExecuteSave(w fyne.Window, state *core.AppState, editQ core.Question, onRefresh func()) {
+	editQ.Content = parser.SanitizeXSS(editQ.Content)
+	for i := range editQ.Options {
+		editQ.Options[i].Text = parser.SanitizeXSS(editQ.Options[i].Text)
+	}
+	for i, a := range editQ.Answers {
+		editQ.Answers[i] = parser.SanitizeXSS(a)
+	}
 	for i, origQ := range state.Questions {
 		if origQ.ID == editQ.ID {
 			state.Questions[i] = editQ
@@ -919,9 +926,15 @@ func showAddQuestionDialog(w fyne.Window, state *core.AppState, onRefresh func()
 		newQ := core.Question{
 			ID:      generateNewQuestionID(state),
 			Type:    qData.selectedType,
-			Content: qData.content,
+			Content: parser.SanitizeXSS(qData.content),
 			Options: qData.options,
 			Answers: qData.answers,
+		}
+		for i := range newQ.Options {
+			newQ.Options[i].Text = parser.SanitizeXSS(newQ.Options[i].Text)
+		}
+		for i, a := range newQ.Answers {
+			newQ.Answers[i] = parser.SanitizeXSS(a)
 		}
 
 		// 将新题目添加到状态中并保存

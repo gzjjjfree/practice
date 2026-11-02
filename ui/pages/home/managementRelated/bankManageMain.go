@@ -264,7 +264,7 @@ func showSuperAdminUpload(w fyne.Window, state *core.AppState, onUploaded func()
 			var banks []network.BankImportItem
 			for _, key := range selectedKeys {
 				filePath := fmt.Sprintf("%s/%s.json", storageRelated.GetStorageDir(), key)
-				bytesData, err := os.ReadFile(filePath)
+				bytesData, err := storageRelated.ReadFileWithChecksum(filePath)
 				if err != nil {
 					customElements.ShowCustomInformation(core.BankManageErrorMsgType, fmt.Sprintf(core.BankManageReadFileErrMsg, err), w)
 					return
@@ -274,6 +274,10 @@ func showSuperAdminUpload(w fyne.Window, state *core.AppState, onUploaded func()
 				if err := json.Unmarshal(bytesData, &bankData); err != nil {
 					customElements.ShowCustomInformation(core.BankManageErrorMsgType, fmt.Sprintf(core.BankManageParseFileErrMsg, err), w)
 					return
+				}
+
+				if bankData.DisplayName == "" {
+					bankData.DisplayName = parser.ExtractFileName(key)
 				}
 
 				banks = append(banks, network.BankImportItem{

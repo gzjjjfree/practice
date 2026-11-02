@@ -763,7 +763,7 @@ type PauseExamResp struct {
 type ResumeExamResp struct {
 	Code int             `json:"code"`
 	Msg  string          `json:"msg"`
-	Data PauseResumeData `json:"msg"`
+	Data PauseResumeData `json:"data"`
 }
 
 // PauseResumeData contains paused exam state.

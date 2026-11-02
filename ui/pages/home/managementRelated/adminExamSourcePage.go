@@ -156,7 +156,7 @@ func buildSourcePage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSta
 
 					for _, key := range checkedKeys {
 						filePath := fmt.Sprintf("%s/%s.json", storageDir, key)
-						data, err := os.ReadFile(filePath)
+						data, err := storageRelated.ReadFileWithChecksum(filePath)
 						if err != nil {
 							customElements.ShowCustomInformation(core.AdminErrorText, core.AdminReadFileErrMsg+err.Error(), w)
 							return
@@ -165,6 +165,9 @@ func buildSourcePage(ws *AdminExamCreateState, w fyne.Window, state *core.AppSta
 						if err := json.Unmarshal(data, &bankData); err != nil {
 							customElements.ShowCustomInformation(core.AdminErrorText, core.AdminParseJSONErrMsg, w)
 							return
+						}
+						if bankData.DisplayName == "" {
+							bankData.DisplayName = parser.ExtractFileName(key)
 						}
 						bankQuestions := convertBankDataToQuestions(&bankData)
 						ws.localQuestions = append(ws.localQuestions, bankQuestions...)

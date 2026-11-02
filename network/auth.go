@@ -21,6 +21,16 @@ type TokenFileData struct {
 	Refresh string `json:"refresh"`
 }
 
+// obfuscate simple XOR obfuscation to prevent plaintext reading
+func obfuscate(data []byte) []byte {
+	key := byte(0xA5)
+	result := make([]byte, len(data))
+	for i, b := range data {
+		result[i] = b ^ key
+	}
+	return result
+}
+
 // NewTokenStorage creates a new token storage instance.
 func NewTokenStorage() *TokenStorage {
 	rootURI := fyne.CurrentApp().Storage().RootURI()
@@ -43,14 +53,20 @@ func (s *TokenStorage) loadFileData() TokenFileData {
 	if err != nil {
 		return TokenFileData{}
 	}
+	// Try unmarshaling directly first (for backward compatibility), then obfuscated
 	var data TokenFileData
-	if err := json.Unmarshal(bytesData, &data); err != nil {
+	if err := json.Unmarshal(bytesData, &data); err == nil && (data.Token != "" || data.Refresh != "") {
+		return data
+	}
+
+	plainData := obfuscate(bytesData)
+	if err := json.Unmarshal(plainData, &data); err != nil {
 		return TokenFileData{}
 	}
 	return data
 }
 
-// SaveToken saves the authentication token to local storage.
+// SaveToken saves the authentication token to local storage with 0600 permissions and obfuscation.
 // It also saves the refresh token if provided (non-empty).
 func (s *TokenStorage) SaveToken(token string) error {
 	fileData := s.loadFileData()
@@ -61,11 +77,12 @@ func (s *TokenStorage) SaveToken(token string) error {
 		return err
 	}
 
+	obfuscated := obfuscate(jsonData)
 	filePath := filepath.Join(s.storageDir, tokenFileName)
-	return os.WriteFile(filePath, jsonData, 0644)
+	return os.WriteFile(filePath, obfuscated, 0600)
 }
 
-// SaveRefreshToken saves the refresh token to local storage.
+// SaveRefreshToken saves the refresh token to local storage with 0600 permissions and obfuscation.
 // It preserves the existing access token.
 func (s *TokenStorage) SaveRefreshToken(refresh string) error {
 	fileData := s.loadFileData()
@@ -78,8 +95,9 @@ func (s *TokenStorage) SaveRefreshToken(refresh string) error {
 		return err
 	}
 
+	obfuscated := obfuscate(jsonData)
 	filePath := filepath.Join(s.storageDir, tokenFileName)
-	return os.WriteFile(filePath, jsonData, 0644)
+	return os.WriteFile(filePath, obfuscated, 0600)
 }
 
 // LoadToken loads the authentication token from local storage.
@@ -103,4 +121,20 @@ func (s *TokenStorage) ClearToken() error {
 		return err
 	}
 	return nil
+}
+
+// ClearRefreshToken clears the refresh token from local storage.
+func (s *TokenStorage) ClearRefreshToken() error {
+	fileData := s.loadFileData()
+	fileData.Refresh = ""
+	if fileData.Token == "" {
+		return s.ClearToken()
+	}
+	jsonData, err := json.Marshal(fileData)
+	if err != nil {
+		return err
+	}
+	obfuscated := obfuscate(jsonData)
+	filePath := filepath.Join(s.storageDir, tokenFileName)
+	return os.WriteFile(filePath, obfuscated, 0600)
 }

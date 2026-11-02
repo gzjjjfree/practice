@@ -8,6 +8,18 @@ const (
 	SwipeThreshold = float32(40.0) // 横向滑动触发翻页的最小累积位移阈值
 )
 
+// --- 响应式布局与屏幕断点常量 ---
+const (
+	DefaultCanvasWidth  = float32(400) // 默认画布宽度
+	DefaultCanvasHeight = float32(750) // 默认画布高度
+	SmallScreenWidth    = float32(550) // 小屏幕宽度阈值
+	SmallScreenHeight   = float32(700) // 小屏幕高度阈值
+	TabletWidth         = float32(768) // 平板设备宽度阈值
+	DesktopWidth        = float32(1024)// 大屏/桌面设备宽度阈值
+	MinResponsiveWidth  = float32(100) // 响应式最小内容宽度
+	DialogMaxHeightRatio = 0.75        // 对话框最大高度占画布比例
+)
+
 // --- 自动跳转延迟 ---
 const (
 	SingleCorrectDelay = 350 // 单选/判断题答对后自动跳下一题的延迟（毫秒）

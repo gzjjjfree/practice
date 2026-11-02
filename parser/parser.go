@@ -143,39 +143,61 @@ func SanitizeXSS(input string) string {
 	if input == "" {
 		return ""
 	}
-	// 1. Remove <script>...</script> tags (case-insensitive)
+	// 1. Remove <script>...</script> and other dangerous tags
 	scriptReg := regexp.MustCompile(`(?i)<script\b[^>]*>[\s\S]*?<\/script>`)
 	cleaned := scriptReg.ReplaceAllString(input, "")
 
-	// 2. Remove javascript: pseudo-protocol
-	jsProtocolReg := regexp.MustCompile(`(?i)javascript\s*:`)
-	cleaned = jsProtocolReg.ReplaceAllString(cleaned, "")
+	// 2. Remove dangerous pseudo-protocols (javascript:, vbscript:, data:, file:, mocha:, livescript:)
+	protocolReg := regexp.MustCompile(`(?i)(javascript|vbscript|data|file|mocha|livescript)\s*:`)
+	cleaned = protocolReg.ReplaceAllString(cleaned, "")
 
 	// 3. Remove dangerous HTML event handlers (onload, onerror, onclick, onmouseover, etc.)
 	eventHandlerReg := regexp.MustCompile(`(?i)\s+on[a-z]+\s*=\s*(?:["\'][^"\']*["\']|[^\s>]+)`)
 	cleaned = eventHandlerReg.ReplaceAllString(cleaned, "")
 
-	// 4. Remove dangerous tags (iframe, object, embed, applet, meta, link, style, form, etc.)
-	dangerTagReg := regexp.MustCompile(`(?i)<\/?(iframe|object|embed|applet|meta|link|style|form|input|button)\b[^>]*>`)
+	// 4. Remove dangerous tags (iframe, object, embed, applet, meta, link, style, form, input, button, svg, math, base, frame, frameset, xml)
+	dangerTagReg := regexp.MustCompile(`(?i)<\/?(iframe|object|embed|applet|meta|link|style|form|input|button|textarea|select|option|svg|math|base|frame|frameset|xml|body|head|html)\b[^>]*>`)
 	cleaned = dangerTagReg.ReplaceAllString(cleaned, "")
 
 	return cleaned
 }
 
-// SanitizeBankData applies XSS sanitization to all fields in BankData.
+// SanitizeBankData applies XSS sanitization to all fields in BankData and enforces content length limits.
 func SanitizeBankData(bank *BankData) {
 	if bank == nil {
 		return
 	}
 	bank.DisplayName = SanitizeXSS(bank.DisplayName)
 	bank.StorageKey = SanitizeXSS(bank.StorageKey)
+	
+	// Limit max questions to prevent DoS / resource exhaustion
+	const maxQuestionsLimit = 50000
+	if len(bank.Questions) > maxQuestionsLimit {
+		bank.Questions = bank.Questions[:maxQuestionsLimit]
+	}
+
 	for i := range bank.Questions {
-		bank.Questions[i].Content = SanitizeXSS(bank.Questions[i].Content)
-		bank.Questions[i].Answer = SanitizeXSS(bank.Questions[i].Answer)
+		content := SanitizeXSS(bank.Questions[i].Content)
+		if len(content) > 10000 {
+			content = content[:10000]
+		}
+		bank.Questions[i].Content = content
+
+		ans := SanitizeXSS(bank.Questions[i].Answer)
+		if len(ans) > 1000 {
+			ans = ans[:1000]
+		}
+		bank.Questions[i].Answer = ans
+
 		bank.Questions[i].Difficulty = SanitizeXSS(bank.Questions[i].Difficulty)
 		bank.Questions[i].SheetName = SanitizeXSS(bank.Questions[i].SheetName)
+		
 		for k, v := range bank.Questions[i].Options {
-			bank.Questions[i].Options[k] = SanitizeXSS(v)
+			optVal := SanitizeXSS(v)
+			if len(optVal) > 5000 {
+				optVal = optVal[:5000]
+			}
+			bank.Questions[i].Options[k] = optVal
 		}
 	}
 }
@@ -194,9 +216,22 @@ func ParseBytesToBank(fileBytes []byte, fileName string, storageKey string) (ban
 		}
 	}()
 
-	isXLSX := bytes.HasPrefix(fileBytes, []byte{0x50, 0x4B, 0x03, 0x04}) || strings.HasSuffix(strings.ToLower(fileName), ".xlsx")
-	isTXT := strings.HasSuffix(strings.ToLower(fileName), ".txt") && len(fileBytes) > 0
-	isJSON := strings.HasSuffix(strings.ToLower(fileName), ".json") && len(fileBytes) > 0
+	// 1. File size validation (max 50MB)
+	const maxUploadFileSize = 50 * 1024 * 1024
+	if int64(len(fileBytes)) > maxUploadFileSize {
+		return nil, fmt.Errorf("file size exceeds maximum limit of 50MB")
+	}
+	if len(fileBytes) == 0 {
+		return nil, fmt.Errorf("uploaded file is empty")
+	}
+
+	isXLSX := bytes.HasPrefix(fileBytes, []byte{0x50, 0x4B, 0x03, 0x04}) || strings.HasSuffix(strings.ToLower(fileName), ".xlsx") || strings.HasSuffix(strings.ToLower(fileName), ".xls")
+	isTXT := strings.HasSuffix(strings.ToLower(fileName), ".txt")
+	isJSON := strings.HasSuffix(strings.ToLower(fileName), ".json")
+
+	if !isXLSX && !isTXT && !isJSON {
+		return nil, fmt.Errorf("unsupported file format or extension mismatch")
+	}
 
 	// XLSX parsing
 	if isXLSX {

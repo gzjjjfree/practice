@@ -1,20 +1,25 @@
-// 测试写入
 package practiceRelated
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
+	"os"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/gzjjjfree/practice/core"
 	"github.com/gzjjjfree/practice/customElements"
+	"github.com/gzjjjfree/practice/parser"
+	"github.com/gzjjjfree/practice/storageRelated"
 )
 
 // HighlightText 创建富文本，将关键词匹配部分高亮为红色/粗体。
@@ -65,27 +70,17 @@ func HighlightText(text, keyword string) *widget.RichText {
 	return rt
 }
 
-// ShowSearchPage 构建带有关键词高亮和题型过滤的搜索 UI。
-// 支持在题库中搜索题目，关键词在题干和选项中以红色粗体高亮显示。
-// 支持按题型过滤搜索结果。
-//
-// 功能说明：
-//   - 该函数用于创建并展示一个搜索页面，允许用户通过输入关键词在题库中搜索题目。
-//   - 搜索结果中的题干和选项部分，匹配的关键词将以红色粗体高亮显示。
-//   - 支持按题型（如全部题型、单选题、多选题、判断题、填空题、简答题等）过滤搜索结果。
+// ShowSearchPage 构建带有关键词高亮、题型过滤和多选下拉题库搜索的 UI。
+// 支持在多个勾选的题库中搜索题目，默认仅选择当前题库。
+// 关键词在题干和选项中以红色粗体高亮显示。
 //
 // 参数说明：
 //   - w: fyne.Window 类型的窗口对象，用于展示搜索页面 UI。
-//   - state: *core.AppState 类型的全局状态对象，包含题库数据、搜索定时器、当前文件名等信息。
+//   - state: *core.AppState 类型的全局状态对象，包含题库数据、搜索定时器、存储文件列表等信息。
 //   - goBack: func() 类型的回调函数，在用户点击返回按钮时调用，用于退出搜索页面并返回上一页。
 func ShowSearchPage(w fyne.Window, state *core.AppState, goBack func()) {
 	pageBg := canvas.NewRectangle(core.HexColor(core.PageBgColor))
 
-	// 返回按钮（backBtn）：用于退出搜索页面并返回上一页。
-	// 功能与业务用途：
-	//   - 点击该按钮时，会停止当前正在执行的搜索定时器（ActiveSearchTimer），并将其置为 nil。
-	//   - 递增 SearchGeneration 的值，使所有待执行的搜索定时器失效，防止在页面返回后仍有旧的搜索任务被触发。
-	//   - 调用 goBack() 回调函数，退出搜索页面并返回上一页。
 	backBtn := customElements.CreateButton(
 		core.AdminBackBtnText, core.BackBtnWidth, core.BackBtnHeight,
 		core.HexColor(core.TextPrimaryColor),
@@ -93,62 +88,149 @@ func ShowSearchPage(w fyne.Window, state *core.AppState, goBack func()) {
 		core.HexColor(core.PageBgColor),
 		core.StrokeMedium, core.FontSizeBody,
 		true, false,
-		fyne.TextAlignCenter, // 👈 居中对齐
-		fyne.TextWrapOff,     // 👈 不换行
-		fyne.TextTruncateOff, // 👈 不换行（截断）
+		fyne.TextAlignCenter,
+		fyne.TextWrapOff,
+		fyne.TextTruncateOff,
 		func() {
 			if state.ActiveSearchTimer != nil {
 				state.ActiveSearchTimer.Stop()
 				state.ActiveSearchTimer = nil
 			}
-			state.SearchGeneration++ // 递增代数以失效所有待执行的 timer
+			state.SearchGeneration++
 			goBack()
 		})
-	// 1. 用 canvas.NewText 替代 widget.NewLabelWithStyle，并精准控制字号
-	titleText := canvas.NewText(core.SearchPageTitleText, core.HexColor(core.TextPrimaryColor))
-	titleText.TextSize = core.FontSizeBody // 👈 统一使用核心字号
+
+	titleText := canvas.NewText("题库搜索", core.HexColor(core.TextPrimaryColor))
+	titleText.TextSize = core.FontSizeBody
 	titleText.TextStyle = fyne.TextStyle{Bold: true}
 
-	// 2. 如果需要它在标题栏居中，可以用 container.NewCenter 包裹
 	titleCenter := container.NewCenter(titleText)
 	rightSpace := canvas.NewRectangle(color.Transparent)
-	rightSpace.SetMinSize(fyne.NewSize(16, 1)) // 16 像素的右侧边距
+	rightSpace.SetMinSize(fyne.NewSize(16, 1))
 
-	// 把文字和右侧空白拼成一个 HBox，再放入 Border 的 Right 槽位
 	rightBox := container.NewHBox(titleCenter, rightSpace)
-
-	// 3. 放入 Border 布局中
 	navBar := container.NewBorder(customElements.GetTitle(), nil, backBtn, rightBox, nil)
+
 	keyword := ""
 	selectedType := core.FilterTypeAllText
+
+	// 默认开始只选择当前题库
+	selectedBanks := make(map[string]bool)
+	if state.CurrentStorageKey != "" {
+		selectedBanks[state.CurrentStorageKey] = true
+	} else if len(state.StoredFiles) > 0 {
+		selectedBanks[state.StoredFiles[0]] = true
+	}
 
 	resultsContainer := container.NewVBox()
 	scrollResults := container.NewScroll(resultsContainer)
 
+	searchAndAppend := func(q core.Question, searchResults *[]core.Question, kw string, st string) {
+		if st != "全部题型" && q.Type != st {
+			return
+		}
+
+		if kw != "" {
+			lowerKeyword := strings.ToLower(kw)
+			matchContent := strings.Contains(strings.ToLower(q.Content), lowerKeyword)
+
+			matchOption := false
+			for _, opt := range q.Options {
+				if strings.Contains(strings.ToLower(opt.Text), lowerKeyword) {
+					matchOption = true
+					break
+				}
+			}
+
+			if !matchContent && !matchOption {
+				return
+			}
+		}
+		*searchResults = append(*searchResults, q)
+	}
+
 	executeSearch := func() {
 		var searchResults []core.Question
-		for _, q := range state.Questions {
-			if selectedType != "全部题型" && q.Type != selectedType {
+		storageDir := storageRelated.GetStorageDir()
+
+		for _, key := range state.StoredFiles {
+			if !selectedBanks[key] {
 				continue
 			}
 
-			if keyword != "" {
-				lowerKeyword := strings.ToLower(keyword)
-				matchContent := strings.Contains(strings.ToLower(q.Content), lowerKeyword)
-
-				matchOption := false
-				for _, opt := range q.Options {
-					if strings.Contains(strings.ToLower(opt.Text), lowerKeyword) {
-						matchOption = true
-						break
+			filePath := fmt.Sprintf("%s/%s.json", storageDir, key)
+			bytesData, err := os.ReadFile(filePath)
+			if err != nil {
+				if key == state.CurrentStorageKey && len(state.Questions) > 0 {
+					for _, q := range state.Questions {
+						qCopy := q
+						if qCopy.BankName == "" {
+							qCopy.BankName = state.CurrentFileName
+						}
+						searchAndAppend(qCopy, &searchResults, keyword, selectedType)
 					}
 				}
-
-				if !matchContent && !matchOption {
-					continue
-				}
+				continue
 			}
-			searchResults = append(searchResults, q)
+
+			var bankData parser.BankData
+			if err := json.Unmarshal(bytesData, &bankData); err != nil {
+				continue
+			}
+
+			bankName := bankData.DisplayName
+			if bankName == "" {
+				bankName = parser.ExtractFileName(key)
+			}
+
+			for _, srcQ := range bankData.Questions {
+				var convertedOpts []core.Option
+				for _, k := range []string{"A", "B", "C", "D", "E", "F", "G", "H", "I"} {
+					if srcQ.Options[k] != "" {
+						convertedOpts = append(convertedOpts, core.Option{Label: k, Text: srcQ.Options[k]})
+					}
+				}
+				var answers []string
+				cleanAns := strings.NewReplacer("、", "", ",", "", " ", "").Replace(srcQ.Answer)
+				for _, char := range cleanAns {
+					norm := core.NormalizeAnswerLabel(string(char))
+					if norm != "" {
+						answers = append(answers, norm)
+					}
+				}
+				if len(answers) == 0 && srcQ.Answer != "" {
+					answers = append(answers, core.NormalizeAnswerLabel(srcQ.Answer))
+				}
+
+				q := core.Question{
+					ID:         fmt.Sprintf("%d", srcQ.ID),
+					Type:       srcQ.Type,
+					Content:    srcQ.Content,
+					Options:    convertedOpts,
+					Answers:    answers,
+					Difficulty: srcQ.Difficulty,
+					BankName:   bankName,
+				}
+
+				searchAndAppend(q, &searchResults, keyword, selectedType)
+			}
+		}
+
+		hasAnySelected := false
+		for _, k := range state.StoredFiles {
+			if selectedBanks[k] {
+				hasAnySelected = true
+				break
+			}
+		}
+		if !hasAnySelected && len(state.Questions) > 0 {
+			for _, q := range state.Questions {
+				qCopy := q
+				if qCopy.BankName == "" {
+					qCopy.BankName = state.CurrentFileName
+				}
+				searchAndAppend(qCopy, &searchResults, keyword, selectedType)
+			}
 		}
 
 		resultsContainer.Objects = nil
@@ -167,7 +249,11 @@ func ShowSearchPage(w fyne.Window, state *core.AppState, goBack func()) {
 					cardBg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
 					cardBg.CornerRadius = core.CardCornerRadius
 
-					headerLeft := widget.NewLabel(fmt.Sprintf(core.QuestionIDHeaderFormat, q.ID))
+					bankTag := q.BankName
+					if bankTag == "" {
+						bankTag = core.DefaultBankNameText
+					}
+					headerLeft := widget.NewLabel(fmt.Sprintf("[%s] 第%s题", bankTag, q.ID))
 					headerLeft.TextStyle = fyne.TextStyle{Bold: true}
 					headerRight := widget.NewLabel(q.Type)
 					headerRight.TextStyle = fyne.TextStyle{Bold: true}
@@ -222,19 +308,132 @@ func ShowSearchPage(w fyne.Window, state *core.AppState, goBack func()) {
 		fyne.Do(func() { resultsContainer.Refresh() })
 	}
 
-	bankName := state.CurrentFileName
-	if bankName == "" {
-		bankName = core.DefaultBankNameText
+	bankSelectContentContainer := container.NewVBox()
+	var refreshBankSelectSummaryDisplay func()
+	refreshBankSelectSummaryDisplay = func() {
+		bankSelectContentContainer.Objects = nil
+		var names []string
+		for _, key := range state.StoredFiles {
+			if selectedBanks[key] {
+				names = append(names, parser.ExtractFileName(key))
+			}
+		}
+		if len(names) == 0 {
+			lbl := widget.NewLabel("• 未选择题库 (请点击右侧按钮选择)")
+			lbl.Wrapping = fyne.TextWrapWord
+			bankSelectContentContainer.Add(lbl)
+			return
+		}
+		for _, name := range names {
+			lbl := widget.NewLabel("• " + name)
+			lbl.Wrapping = fyne.TextWrapWord
+			bankSelectContentContainer.Add(lbl)
+		}
 	}
-	titleCard := container.NewStack(
+	refreshBankSelectSummaryDisplay()
+
+	var showBankSelectDialog func()
+	showBankSelectDialog = func() {
+		checkboxContent := container.NewVBox()
+
+		var refreshCheckboxes func()
+		refreshCheckboxes = func() {
+			checkboxContent.Objects = nil
+			if len(state.StoredFiles) == 0 {
+				checkboxContent.Add(widget.NewLabel("暂无其他已存储题库"))
+				return
+			}
+			grid := container.NewGridWithColumns(1)
+			for _, key := range state.StoredFiles {
+				ckKey := key
+				showName := parser.ExtractFileName(ckKey)
+				isChecked := selectedBanks[ckKey]
+				cb := widget.NewCheck("📖 "+showName, func(checked bool) {
+					selectedBanks[ckKey] = checked
+				})
+				cb.SetChecked(isChecked)
+				grid.Add(cb)
+			}
+			checkboxContent.Add(grid)
+		}
+		refreshCheckboxes()
+
+		selectAllBtn := widget.NewButton("全选", func() {
+			for _, k := range state.StoredFiles {
+				selectedBanks[k] = true
+			}
+			refreshCheckboxes()
+		})
+		deselectAllBtn := widget.NewButton("全不选", func() {
+			for _, k := range state.StoredFiles {
+				selectedBanks[k] = false
+			}
+			refreshCheckboxes()
+		})
+
+		var dlg dialog.Dialog
+		confirmBtn := widget.NewButton("确定", func() {
+			if dlg != nil {
+				dlg.Hide()
+			}
+			refreshBankSelectSummaryDisplay()
+			executeSearch()
+		})
+		confirmBtn.Importance = widget.HighImportance
+
+		cancelBtn := widget.NewButton("取消", func() {
+			if dlg != nil {
+				dlg.Hide()
+			}
+		})
+
+		actionsRow := container.NewHBox(selectAllBtn, deselectAllBtn, layout.NewSpacer(), cancelBtn, confirmBtn)
+
+		scrollableChecks := container.NewVScroll(checkboxContent)
+		scrollableChecks.SetMinSize(fyne.NewSize(380, 320))
+
+		dialogBody := container.NewVBox(
+			widget.NewLabelWithStyle("请勾选需要搜索的题库（支持多选）:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+			container.NewGridWrap(fyne.NewSize(1, 10)),
+			scrollableChecks,
+			container.NewGridWrap(fyne.NewSize(1, 15)),
+			actionsRow,
+		)
+
+		styledContent := container.NewStack(
+			container.NewGridWrap(fyne.NewSize(420, 480)),
+			container.NewPadded(dialogBody),
+		)
+
+		dlg = dialog.NewCustomWithoutButtons("多选搜索题库", styledContent, w)
+		dlg.Show()
+	}
+
+	dropdownTriggerBtn := widget.NewButton("选择/修改题库 ▾", func() {
+		showBankSelectDialog()
+	})
+
+	bankSelectHeader := container.NewHBox(
+		widget.NewLabelWithStyle("搜索题库范围:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		layout.NewSpacer(),
+		dropdownTriggerBtn,
+	)
+
+	bankSelectContent := container.NewVBox(
+		bankSelectHeader,
+		container.NewGridWrap(fyne.NewSize(1, 6)),
+		bankSelectContentContainer,
+	)
+
+	bankSelectCard := container.NewStack(
 		canvas.NewRectangle(core.HexColor(core.CardBgColor)),
-		container.NewPadded(widget.NewLabelWithStyle(core.BankTitlePrefix+bankName, fyne.TextAlignCenter, fyne.TextStyle{})),
+		container.NewPadded(bankSelectContent),
 	)
 
 	input := widget.NewEntry()
 	input.SetPlaceHolder(core.SearchInputPlaceholderText)
 	input.OnChanged = func(s string) {
-		keyword = strings.TrimSpace(s)
+		keyword = parser.SanitizeXSS(strings.TrimSpace(s))
 		if state.ActiveSearchTimer != nil {
 			state.ActiveSearchTimer.Stop()
 		}
@@ -242,7 +441,7 @@ func ShowSearchPage(w fyne.Window, state *core.AppState, goBack func()) {
 		state.SearchGeneration = gen
 		state.ActiveSearchTimer = time.AfterFunc(time.Duration(core.SearchDebounceMs)*time.Millisecond, func() {
 			if state.SearchGeneration != gen {
-				return // 已过期，跳过本次回调
+				return
 			}
 			executeSearch()
 		})
@@ -290,9 +489,9 @@ func ShowSearchPage(w fyne.Window, state *core.AppState, goBack func()) {
 				core.HexColor(btnColor.StrokeColor),
 				core.StrokeMedium, core.FontSizeSubtitle,
 				false, false,
-				fyne.TextAlignCenter, // 👈 居中对齐
-				fyne.TextWrapOff,     // 👈 不换行
-				fyne.TextTruncateOff, // 👈 不换行（截断）
+				fyne.TextAlignCenter,
+				fyne.TextWrapOff,
+				fyne.TextTruncateOff,
 				func() {
 					selectedType = currT
 					refreshFilters()
@@ -308,7 +507,7 @@ func ShowSearchPage(w fyne.Window, state *core.AppState, goBack func()) {
 	refreshFilters()
 	filterCard := container.NewStack(canvas.NewRectangle(core.HexColor(core.CardBgColor)), container.NewPadded(filterContainer))
 
-	topBox := container.NewVBox(titleCard, searchCard, filterCard)
+	topBox := container.NewVBox(bankSelectCard, searchCard, filterCard)
 
 	mainLayout := container.NewBorder(
 		navBar, nil, nil, nil,

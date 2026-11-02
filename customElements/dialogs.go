@@ -625,3 +625,82 @@ func ShowCustomLoading(title, message string, parent fyne.Window) dialog.Dialog 
 	return d
 }
 
+// ShowErrorWithRetry 显示一个带"重试"和"取消"按钮的操作失败提示对话框，支持点击重试回调。
+func ShowErrorWithRetry(title, message string, onRetry func(), parent fyne.Window) {
+	var d dialog.Dialog
+
+	btnRetry := CreateButton(
+		"重试", 120, 42,
+		core.HexColor(core.TextPrimaryColor),
+		core.HexColor(core.BtnPrimaryBg),
+		core.HexColor(core.BtnPrimaryBg),
+		1.5, core.FontSizeBody,
+		true, false,
+		fyne.TextAlignCenter, fyne.TextWrapOff, fyne.TextTruncateOff,
+		func() {
+			if d != nil {
+				d.Hide()
+			}
+			if onRetry != nil {
+				onRetry()
+			}
+		},
+	)
+
+	btnCancel := CreateButton(
+		"取消", 120, 42,
+		core.HexColor(core.TextPrimaryColor),
+		core.HexColor(core.SectionBgColor),
+		core.HexColor(core.SectionBgColor),
+		1.5, core.FontSizeBody,
+		true, false,
+		fyne.TextAlignCenter, fyne.TextWrapOff, fyne.TextTruncateOff,
+		func() {
+			if d != nil {
+				d.Hide()
+			}
+		},
+	)
+
+	spacer := container.NewGridWrap(fyne.NewSize(core.DialogButtonGap, 1))
+	btnGroup := container.NewHBox(btnCancel, spacer, btnRetry)
+
+	msgText := widget.NewRichText(&widget.TextSegment{
+		Text: message,
+		Style: widget.RichTextStyle{
+			SizeName:  theme.SizeNameSubHeadingText,
+			Alignment: fyne.TextAlignCenter,
+		},
+	})
+	msgText.Wrapping = fyne.TextWrapWord
+
+	content := container.NewVBox(
+		msgText,
+		container.NewGridWrap(fyne.NewSize(1, core.DialogVerticalGap)),
+		container.NewPadded(container.NewCenter(btnGroup)),
+	)
+
+	minWidthBox := container.NewGridWrap(fyne.NewSize(core.DialogMinWidth, 1))
+
+	styledContent := container.NewStack(
+		minWidthBox,
+		container.NewPadded(content),
+	)
+
+	if parent != nil {
+		d = dialog.NewCustomWithoutButtons(title, styledContent, parent)
+		d.Show()
+	} else {
+		app := fyne.CurrentApp()
+		if app != nil {
+			win := app.NewWindow("")
+			win.Hide()
+			d = dialog.NewCustomWithoutButtons(title, styledContent, win)
+			d.Show()
+			return
+		}
+		d = dialog.NewCustomWithoutButtons(title, styledContent, nil)
+		d.Show()
+	}
+}
+

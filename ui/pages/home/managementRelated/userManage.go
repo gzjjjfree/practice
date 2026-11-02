@@ -271,11 +271,6 @@ func ShowUserManage(w fyne.Window, state *core.AppState, backToHome func()) {
 //  4. 对于非 superadmin 用户，显示归属信息（通过 createdBy 查找创建者用户名）。
 //  5. 组合所有UI元素并返回卡片组件。
 func buildUserCard(user *network.UserItem, state *core.AppState, userMap map[int]string, onEdit func(), onDelete func()) fyne.CanvasObject {
-	cardBg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
-	cardBg.CornerRadius = core.CardCornerRadius
-	cardBg.StrokeColor = core.HexColor(core.BorderLightColor)
-	cardBg.StrokeWidth = core.StrokeThin
-
 	// Username
 	nameText := canvas.NewText(core.IconUserPrefix+user.Username, core.HexColor(core.TextPrimaryColor))
 	nameText.TextSize = core.CardNameTextSize
@@ -363,10 +358,7 @@ func buildUserCard(user *network.UserItem, state *core.AppState, userMap map[int
 		)
 	}
 
-	return container.NewStack(
-		cardBg,
-		container.NewPadded(cardContent),
-	)
+	return customElements.CreateCard(cardContent)
 }
 
 // showCreateUserDialog 显示用于创建新用户的对话框，使用标准化的 Form 组件。
@@ -669,11 +661,6 @@ func ShowAdminManage(w fyne.Window, state *core.AppState, backToHome func()) {
 //  2. 显示用户名（带管理员图标）和角色徽章（根据角色设置不同颜色）。
 //  3. 组合所有UI元素并返回卡片组件。
 func buildAdminCard(admin *network.UserItem, state *core.AppState) fyne.CanvasObject {
-	cardBg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
-	cardBg.CornerRadius = core.CardCornerRadius
-	cardBg.StrokeColor = core.HexColor(core.BorderLightColor)
-	cardBg.StrokeWidth = core.StrokeThin
-
 	// Username
 	nameText := canvas.NewText(core.IconAdminPrefix+admin.Username, core.HexColor(core.TextPrimaryColor))
 	nameText.TextSize = core.CardNameTextSize
@@ -694,8 +681,5 @@ func buildAdminCard(admin *network.UserItem, state *core.AppState) fyne.CanvasOb
 		container.NewGridWrap(fyne.NewSize(1, 10)),
 	)
 
-	return container.NewStack(
-		cardBg,
-		container.NewPadded(cardContent),
-	)
+	return customElements.CreateCard(cardContent)
 }

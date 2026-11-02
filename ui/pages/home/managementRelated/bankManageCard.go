@@ -39,11 +39,6 @@ import (
 //   - "删除题库"按钮 (core.BankManageDeleteBtnText)：点击后弹出确认对话框，确认后从服务器删除该题库并刷新列表。
 //   - "推送题库"按钮 (core.BankManagePushBtnText)：仅对管理员和超级管理员显示，点击后打开推送题库对话框，允许将该题库推送到其他管理员或用户。
 func buildBankCardForOwner(w fyne.Window, bank *network.BankItem, state *core.AppState, owner string, onBack func()) fyne.CanvasObject {
-	cardBg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
-	cardBg.CornerRadius = core.CardCornerRadius
-	cardBg.StrokeColor = core.HexColor(core.BorderLightColor)
-	cardBg.StrokeWidth = core.StrokeThin
-
 	displayName := bank.DisplayName
 	if displayName == "" {
 		displayName = bank.BankName
@@ -158,7 +153,7 @@ func buildBankCardForOwner(w fyne.Window, bank *network.BankItem, state *core.Ap
 		container.NewGridWrap(fyne.NewSize(1, core.LayoutSpacingH10)),
 		btnRow,
 	)
-	return container.NewStack(cardBg, container.NewPadded(cardContent))
+	return customElements.CreateCard(cardContent)
 }
 
 // parseTime 解析时间字符串。

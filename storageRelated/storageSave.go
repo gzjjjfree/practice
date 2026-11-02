@@ -52,9 +52,11 @@ func saveSetNoLock(state *core.AppState, suffix string, currentSet map[string]bo
 		slog.Warn("marshal failed", "file", fileName, "err", err)
 		return
 	}
-	if err := os.WriteFile(absolutePath, jsonData, 0644); err != nil {
-		slog.Warn("write file failed", "file", fileName, "err", err)
+	if err := AtomicWriteFileWithChecksum(absolutePath, jsonData); err != nil {
+		slog.Warn("atomic write file with checksum failed", "file", fileName, "err", err)
 	}
+
+	CheckStorageSpace()
 }
 
 // HandleUserSelectOption is the central answer-handling gate.
@@ -132,8 +134,8 @@ func savePracticeRecordsNoLock(state *core.AppState, modeRecordsCopy map[string]
 		slog.Warn("marshal records failed", "file", fileName, "err", err)
 		return
 	}
-	if err := os.WriteFile(absolutePath, bytesData, 0644); err != nil {
-		slog.Warn("write records failed", "file", fileName, "err", err)
+	if err := AtomicWriteFileWithChecksum(absolutePath, bytesData); err != nil {
+		slog.Warn("atomic write records with checksum failed", "file", fileName, "err", err)
 	}
 }
 

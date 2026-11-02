@@ -266,6 +266,30 @@ func NewNormalButton(text string, onTapped func()) *CustomButton {
 	)
 }
 
+// CreateCard 创建带有标准圆角和边框的卡片容器
+func CreateCard(content fyne.CanvasObject) *fyne.Container {
+	cardBg := canvas.NewRectangle(core.HexColor(core.CardBgColor))
+	cardBg.CornerRadius = core.CardCornerRadius
+	cardBg.StrokeColor = core.HexColor(core.BorderLightColor)
+	cardBg.StrokeWidth = core.StrokeThin
+	return container.NewStack(
+		cardBg,
+		container.NewPadded(content),
+	)
+}
+
+// CreateCardCustom 创建带有自定义背景色、边框及圆角的卡片容器
+func CreateCardCustom(content fyne.CanvasObject, cornerRadius, strokeWidth float32, bgColor, strokeColor color.Color) *fyne.Container {
+	cardBg := canvas.NewRectangle(bgColor)
+	cardBg.CornerRadius = cornerRadius
+	cardBg.StrokeColor = strokeColor
+	cardBg.StrokeWidth = strokeWidth
+	return container.NewStack(
+		cardBg,
+		container.NewPadded(content),
+	)
+}
+
 func (b *CustomButton) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(b.container)
 }
