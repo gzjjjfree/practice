@@ -99,7 +99,63 @@ func ShowPractice(w fyne.Window, state *core.AppState, backFunc func(fyne.Window
 	// 每次状态变化时调用此函数重新渲染页面
 	refreshPracticeUI = func() {
 		// 边界检查：确保索引在有效范围内
-		if state.Index < 0 || state.Index >= len(state.CurrentList) {
+		if len(state.CurrentList) == 0 && strings.Contains(state.Title, "修正题目") {
+			backBtn := customElements.CreateButton(
+				core.AdminBackBtnText,
+				core.BackBtnWidth, core.BackBtnHeight,
+				core.HexColor(core.TextPrimaryColor),
+				core.HexColor(core.SectionBgColor),
+				core.HexColor(core.SectionBgColor),
+				core.StrokeMedium, core.FontSizeBody,
+				true, false,
+				fyne.TextAlignCenter,
+				fyne.TextWrapOff,
+				fyne.TextTruncateOff,
+				func() {
+					backFunc(w, state)
+				},
+			)
+
+			titleLbl := canvas.NewText(state.Title, core.HexColor(core.TextPrimaryColor))
+			titleLbl.TextStyle = fyne.TextStyle{Bold: true}
+			titleLbl.TextSize = core.FontSizeBody
+			titleCenter := container.NewCenter(titleLbl)
+			topNav := container.NewBorder(nil, nil, backBtn, nil, titleCenter)
+			topNavPadded := container.NewPadded(topNav)
+
+			bankNameText := widget.NewLabel("📖 " + state.CurrentFileName + " (当前题库暂无题目)")
+			bankNameText.Alignment = fyne.TextAlignCenter
+
+			addFirstBtn := customElements.CreateButton(
+				"➕ 新增第一道题目", 160, 40,
+				core.HexColor(core.TextPrimaryColor),
+				core.HexColor(core.BtnPrimaryBg),
+				core.HexColor(core.BtnPrimaryBg),
+				1.5, 18,
+				true, false,
+				fyne.TextAlignCenter,
+				fyne.TextWrapOff,
+				fyne.TextTruncateOff,
+				func() {
+					showAddQuestionDialog(w, state, func() {
+						state.CurrentList = state.Questions
+						refreshPracticeUI()
+					})
+				},
+			)
+
+			centerContent := container.NewVBox(
+				bankNameText,
+				container.NewGridWrap(fyne.NewSize(1, 20)),
+				container.NewCenter(addFirstBtn),
+			)
+
+			mainLayout := container.NewBorder(topNavPadded, nil, nil, nil, container.NewCenter(centerContent))
+			wBackground := canvas.NewRectangle(core.HexColor(core.PageBgColor))
+			wRootLayout := container.NewStack(wBackground, mainLayout)
+			w.SetContent(wRootLayout)
+			return
+		} else if state.Index < 0 || state.Index >= len(state.CurrentList) {
 			return
 		}
 		q := state.CurrentList[state.Index]

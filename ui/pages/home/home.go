@@ -19,7 +19,6 @@ import (
 	"github.com/gzjjjfree/practice/customElements"
 	"github.com/gzjjjfree/practice/export"
 	"github.com/gzjjjfree/practice/gz_theme"
-	"github.com/gzjjjfree/practice/parser"
 	"github.com/gzjjjfree/practice/storageRelated"
 	"github.com/gzjjjfree/practice/ui/pages/home/managementRelated"
 	"github.com/gzjjjfree/practice/ui/pages/home/practiceRelated"
@@ -101,8 +100,8 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 	}))
 
 	grid.Add(makeCustomGridBtn("📝", "修正题目", func() {
-		if len(state.Questions) == 0 {
-			customElements.ShowCustomInformation("提示", "请先导入题库", w)
+		if state.CurrentStorageKey == "" {
+			customElements.ShowCustomInformation("提示", "请先选择或创建一个题库", w)
 			return
 		}
 		practiceRelated.ShowTypeSelection(w, state, "修正题目", func() { ShowHome(w, state) })
@@ -338,7 +337,7 @@ func ShowHome(w fyne.Window, state *core.AppState) {
 
 		for _, key := range state.StoredFiles {
 			fileKey := key
-			showName := parser.ExtractFileName(fileKey)
+			showName := storageRelated.GetBankDisplayName(fileKey)
 
 			rowColor := &struct {
 				TextColor   string

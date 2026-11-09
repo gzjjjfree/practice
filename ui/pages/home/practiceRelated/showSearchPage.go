@@ -253,7 +253,13 @@ func ShowSearchPage(w fyne.Window, state *core.AppState, goBack func()) {
 					if bankTag == "" {
 						bankTag = core.DefaultBankNameText
 					}
-					headerLeft := widget.NewLabel(fmt.Sprintf("[%s] 第%s题", bankTag, q.ID))
+					// 限制题库名字显示长度，防止名字过长导致卡片过宽超出屏幕
+					displayBankTag := bankTag
+					if len([]rune(displayBankTag)) > 12 {
+						displayBankTag = string([]rune(displayBankTag)[:12]) + "..."
+					}
+
+					headerLeft := widget.NewLabel(fmt.Sprintf("[%s] 第%s题", displayBankTag, q.ID))
 					headerLeft.TextStyle = fyne.TextStyle{Bold: true}
 					headerRight := widget.NewLabel(q.Type)
 					headerRight.TextStyle = fyne.TextStyle{Bold: true}

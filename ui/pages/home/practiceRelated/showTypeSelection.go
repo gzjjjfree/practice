@@ -68,6 +68,42 @@ func ShowTypeSelection(w fyne.Window, state *core.AppState, practiceMode string,
 	bankNameBg.StrokeWidth = core.StrokeThin
 	bankNameCard := container.NewStack(bankNameBg, container.NewPadded(bankNameText))
 
+	btnEditBankName := customElements.CreateButton(
+		"修改题库名", 120, 35,
+		core.HexColor(core.TextPrimaryColor),
+		core.HexColor(core.ColorSelectedBorder),
+		core.HexColor(core.ColorSelectedBorder),
+		1.5, 16,
+		true, false,
+		fyne.TextAlignCenter,
+		fyne.TextWrapOff,
+		fyne.TextTruncateOff,
+		func() {
+			ShowEditBankNameDialog(w, state, func() {
+				ShowTypeSelection(w, state, practiceMode, backToHome)
+			})
+		},
+	)
+
+	btnAddBank := customElements.CreateButton(
+		"新增题库", 120, 35,
+		core.HexColor(core.TextPrimaryColor),
+		core.HexColor(core.BtnPrimaryBg),
+		core.HexColor(core.BtnPrimaryBg),
+		1.5, 16,
+		true, false,
+		fyne.TextAlignCenter,
+		fyne.TextWrapOff,
+		fyne.TextTruncateOff,
+		func() {
+			ShowAddNewBankDialog(w, state, func() {
+				ShowTypeSelection(w, state, practiceMode, backToHome)
+			})
+		},
+	)
+
+	bankActionRow := container.NewCenter(container.NewHBox(btnEditBankName, container.NewGridWrap(fyne.NewSize(15, 1)), btnAddBank))
+
 	typeSet := make(map[string]bool)
 	for _, q := range state.Questions {
 		if q.Type != "" {
@@ -164,7 +200,7 @@ func ShowTypeSelection(w fyne.Window, state *core.AppState, practiceMode string,
 				state.CurrentList = filteredList
 				state.Title = fmt.Sprintf("%s - %s", practiceMode, typeStr)
 
-				if len(state.CurrentList) == 0 {
+				if len(state.CurrentList) == 0 && practiceMode != "修正题目" {
 					customElements.ShowCustomInformation("提示", "该题型下没有题目", w)
 					return
 				}
@@ -217,6 +253,7 @@ func ShowTypeSelection(w fyne.Window, state *core.AppState, practiceMode string,
 	// 顶部放 bankNameCard 和 分割线，Center 位置放 noShadowScrollWrapper（自动向下填充撑满）
 	topHeader := container.NewVBox(
 		container.NewPadded(bankNameCard),
+		container.NewPadded(bankActionRow),
 		widget.NewSeparator(),
 	)
 

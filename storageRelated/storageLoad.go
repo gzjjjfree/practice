@@ -83,10 +83,26 @@ func RefreshLocalFilesList(state *core.AppState) {
 	state.StoredFiles = finalKeys
 }
 
+// GetBankDisplayName 获取题库的显示名称（优先从本地 JSON 文件中读取 DisplayName，若不存在或失败则回退到 ExtractFileName）
+func GetBankDisplayName(storageKey string) string {
+	storageDir := GetStorageDir()
+	absoluteReadPath := filepath.Join(storageDir, storageKey+".json")
+	bytesData, err := ReadFileWithChecksum(absoluteReadPath)
+	if err == nil {
+		var bankData parser.BankData
+		if err := json.Unmarshal(bytesData, &bankData); err == nil {
+			if bankData.DisplayName != "" {
+				return bankData.DisplayName
+			}
+		}
+	}
+	return parser.ExtractFileName(storageKey)
+}
+
 // LoadAndRenderBank 从本地加载指定题库并刷新界面状态。
 func LoadAndRenderBank(w fyne.Window, state *core.AppState, targetKey string) {
 	state.CurrentStorageKey = targetKey
-	state.CurrentFileName = parser.ExtractFileName(targetKey)
+	state.CurrentFileName = GetBankDisplayName(targetKey)
 
 	storageDir := GetStorageDir()
 	absoluteReadPath := filepath.Join(storageDir, targetKey+".json")
@@ -95,6 +111,9 @@ func LoadAndRenderBank(w fyne.Window, state *core.AppState, targetKey string) {
 	if err == nil {
 		var bankData parser.BankData
 		if err := json.Unmarshal(bytesData, &bankData); err == nil {
+			if bankData.DisplayName != "" {
+				state.CurrentFileName = bankData.DisplayName
+			}
 			core.SyncQuestionsToState(state, &bankData)
 			LoadRecordsForCurrentBank(state)
 			LoadPracticeRecordsFromLocal(state)

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -998,4 +999,90 @@ func generateNewQuestionID(state *core.AppState) string {
 	}
 
 	return strconv.Itoa(maxID + 1)
+}
+
+// ShowEditBankNameDialog 显示修改题库名称对话框
+func ShowEditBankNameDialog(w fyne.Window, state *core.AppState, onRefresh func()) {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetText(state.CurrentFileName)
+
+	content := container.NewVBox(
+		widget.NewLabel("请输入新的题库名称:"),
+		nameEntry,
+	)
+
+	customElements.ShowCustomConfirm("修改题库名称", "确定", "取消", content, func(confirm bool) bool {
+		if confirm {
+			newName := strings.TrimSpace(nameEntry.Text)
+			if newName == "" {
+				customElements.ShowCustomInformation("提示", "题库名称不能为空", w)
+				return false
+			}
+			state.CurrentFileName = newName
+			if err := SyncStateToDisk(state); err != nil {
+				dialog.ShowError(fmt.Errorf("修改题库名称失败: %v", err), w)
+				return false
+			}
+			storageRelated.RefreshLocalFilesList(state)
+			customElements.ShowCustomInformation("成功", "题库名称已修改", w)
+			onRefresh()
+		}
+		return true
+	}, w)
+}
+
+// ShowAddNewBankDialog 显示新增题库对话框
+func ShowAddNewBankDialog(w fyne.Window, state *core.AppState, onRefresh func()) {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("例如：高数期末复习题库")
+
+	content := container.NewVBox(
+		widget.NewLabel("请输入新题库名称:"),
+		nameEntry,
+	)
+
+	customElements.ShowCustomConfirm("新增题库", "创建", "取消", content, func(confirm bool) bool {
+		if confirm {
+			bankName := strings.TrimSpace(nameEntry.Text)
+			if bankName == "" {
+				customElements.ShowCustomInformation("提示", "题库名称不能为空", w)
+				return false
+			}
+
+			newStorageKey := fmt.Sprintf("jsonData_%s_%d", bankName, time.Now().UnixNano()/int64(time.Millisecond))
+			bankData := parser.BankData{
+				DisplayName: bankName,
+				StorageKey:  newStorageKey,
+				Questions:   []parser.QuestionItem{},
+			}
+
+			jsonData, err := json.Marshal(bankData)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("创建题库失败: %v", err), w)
+				return false
+			}
+
+			storageDir := storageRelated.GetStorageDir()
+			absoluteSavePath := filepath.Join(storageDir, newStorageKey+".json")
+			if err := os.WriteFile(absoluteSavePath, jsonData, 0644); err != nil {
+				dialog.ShowError(fmt.Errorf("保存题库文件失败: %v", err), w)
+				return false
+			}
+
+			// 切换到新题库
+			state.CurrentStorageKey = newStorageKey
+			state.CurrentFileName = bankName
+			state.Questions = []core.Question{}
+			state.CurrentList = []core.Question{}
+			state.Index = 0
+			state.WrongSet = make(map[string]bool)
+			state.FavSet = make(map[string]bool)
+			state.PracticeRecords = make(map[string]string)
+
+			storageRelated.RefreshLocalFilesList(state)
+			customElements.ShowCustomInformation("成功", "新题库创建成功并已切换", w)
+			onRefresh()
+		}
+		return true
+	}, w)
 }
